@@ -1,0 +1,44 @@
+:root {
+  color-scheme: dark;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+#feed {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  /* Mirror horizontally for the natural selfie view used when signing. */
+  transform: scaleX(-1);
+}
+
+.message {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  text-align: center;
+  font: 500 1.25rem/1.5 system-ui, -apple-system, sans-serif;
+  color: #fff;
+  background: #000;
+}
+
+.message.hidden {
+  display: none;
+}
