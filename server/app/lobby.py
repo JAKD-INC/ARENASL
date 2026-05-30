@@ -88,6 +88,9 @@ def leave_lobby(pid: int) -> Lobby | None:
         lobby.match_id = None
     for m in lobby.members:
         m.ready = False
+        survivor = state.players.get(m.player_id)
+        if survivor is not None:
+            survivor.match_id = None
 
     if not lobby.members:
         state.lobbies.pop(lobby.code, None)
@@ -130,6 +133,10 @@ def _fill_to_match(lobby: Lobby) -> Match:
     )
     state.matches[match.id] = match
     lobby.match_id = match.id
+    for pid in (host, joiner):
+        player = state.players.get(pid)
+        if player is not None:
+            player.match_id = match.id
     return match
 
 
@@ -153,6 +160,7 @@ def _clear_lobby(pid: int) -> None:
     if p is not None:
         p.status = "idle"
         p.lobby_code = None
+        p.match_id = None
 
 
 def _leave_current_lobby(pid: int) -> None:

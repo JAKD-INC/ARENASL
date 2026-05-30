@@ -17,6 +17,7 @@ class Player:
     elo: int
     status: str = "idle"  # idle | in_lobby | queued | in_match
     lobby_code: str | None = None
+    match_id: str | None = None  # set when the lobby fills; used to route signaling
 
 
 @dataclass

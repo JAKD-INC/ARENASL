@@ -18,12 +18,12 @@ def test_ws_auth_ok(client):
 
 
 def test_ws_unsupported_message_after_auth(client):
-    # `signal` is a valid schema but not implemented until phase 1d.
+    # `sign.attempt` is a valid schema but not implemented until phase 1e.
     token = register(client, email="echo@example.com")
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "auth", "token": token})
         assert ws.receive_json()["type"] == "auth.ok"
-        ws.send_json({"type": "signal", "data": {}})
+        ws.send_json({"type": "sign.attempt", "word_index": 0, "accuracy": 1.0})
         resp = ws.receive_json()
         assert resp["type"] == "error"
         assert resp["code"] == "unsupported"

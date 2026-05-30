@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     mm_window_start: int = 50
     mm_window_widen_per_2s: int = 25
 
+    # --- webrtc / TURN ---
+    # STUN is free + auth-less. TURN is only emitted when turn_host is set; its
+    # credentials are short-lived and minted per player (see app/turn.py).
+    stun_urls: list[str] = ["stun:stun.l.google.com:19302"]
+    turn_host: str = ""  # empty => STUN-only (no TURN entries)
+    turn_udp_port: int = 3478
+    turn_tls_port: int = 5349
+    turn_ttl_seconds: int = 3600
+
     # --- match lifecycle ---
     reconnect_grace_seconds: int = 5
     match_ready_timeout_seconds: int = 60

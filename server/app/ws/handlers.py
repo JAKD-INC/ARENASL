@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app import lobby, matchmaking, state, warmup
+from app import lobby, matchmaking, signaling, state, turn, warmup
 from app.connection_manager import manager
 from app.messages import (
     ClientMessage,
@@ -25,6 +25,7 @@ from app.messages import (
     QueueJoin,
     QueueLeave,
     QueueStatus,
+    Signal,
     WarmupStart,
     error,
 )
@@ -49,6 +50,8 @@ async def dispatch(pid: int, msg: ClientMessage) -> None:
         await _on_queue_join(pid)
     elif isinstance(msg, QueueLeave):
         await _on_queue_leave(pid)
+    elif isinstance(msg, Signal):
+        await _on_signal(pid, msg.data)
     else:
         await manager.send(
             pid, error("unsupported", f"'{msg.type}' is not available yet")
@@ -127,6 +130,19 @@ async def _on_queue_leave(pid: int) -> None:
     await manager.send(pid, QueueStatus(position=0))
 
 
+# --- signaling relay --------------------------------------------------------
+
+
+async def _on_signal(pid: int, data: dict) -> None:
+    """Forward opaque WebRTC signaling data to the other player in the match."""
+    try:
+        peer = signaling.peer_of(pid)
+    except signaling.SignalingError as exc:
+        await manager.send(pid, error(exc.code, exc.message))
+        return
+    await manager.send(peer, Signal(type="signal", data=data))
+
+
 # --- view builders ----------------------------------------------------------
 
 
@@ -162,5 +178,6 @@ async def _send_match_found(match: Match) -> None:
                 opponent=OpponentView(
                     player_id=opp.id, display_name=opp.display_name, elo=opp.elo
                 ),
+                ice_servers=turn.build_ice_servers(pid),
             ),
         )
