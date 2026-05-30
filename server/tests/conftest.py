@@ -51,6 +51,60 @@ def domain():
     manager.reset()
 
 
+class FakeManager:
+    """Records sends instead of touching real sockets, so handler/broadcast logic
+    can be driven on a single event loop (asyncio.run) the way production runs."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[int, dict]] = []
+        self.connected: set[int] = set()
+
+    def is_connected(self, pid: int) -> bool:
+        return pid in self.connected
+
+    async def connect(self, pid: int, ws) -> None:  # noqa: ANN001
+        self.connected.add(pid)
+
+    async def disconnect(self, pid: int) -> None:
+        self.connected.discard(pid)
+
+    async def send(self, pid: int, msg) -> None:  # noqa: ANN001
+        self.sent.append((pid, msg.model_dump()))
+
+    async def broadcast(self, pids, msg) -> None:  # noqa: ANN001
+        for pid in pids:
+            await self.send(pid, msg)
+
+    def for_(self, pid: int) -> list[dict]:
+        return [m for (p, m) in self.sent if p == pid]
+
+    def types_for(self, pid: int) -> list[str]:
+        return [m["type"] for m in self.for_(pid)]
+
+    def last(self, pid: int, type_: str) -> dict:
+        return [m for m in self.for_(pid) if m["type"] == type_][-1]
+
+
+@pytest.fixture
+def fake(domain, monkeypatch):
+    """A FakeManager monkeypatched into the handlers module (replaces the real
+    ConnectionManager singleton for the duration of a test)."""
+    from app.ws import handlers
+
+    fm = FakeManager()
+    monkeypatch.setattr(handlers, "manager", fm)
+    return fm
+
+
+def register_players(fm: FakeManager, *players: tuple[int, str, int]) -> None:
+    """Register (player_id, display_name, elo) tuples and mark them connected."""
+    from app.ws import handlers
+
+    for pid, name, elo in players:
+        handlers.register_player(pid, name, elo)
+        fm.connected.add(pid)
+
+
 def register(client: TestClient, *, email: str, password: str = "supersecret123",
              display_name: str = "Player", experience: str = "intermediate") -> str:
     """Register a user and return their access token."""

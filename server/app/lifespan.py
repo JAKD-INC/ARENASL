@@ -6,6 +6,7 @@ Later phases start the matchmaking background task here and cancel it on shutdow
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -13,6 +14,7 @@ from fastapi import FastAPI
 
 from app.config import get_settings
 from app.db import engine
+from app.matchmaking import matchmaking_loop
 from app.models_db import Base
 from app.words import init_dataset
 
@@ -32,6 +34,16 @@ async def lifespan(app: FastAPI):
         len(dataset.entries),
     )
 
-    yield
+    # Background matchmaking ticker. Keep a strong reference; cancel + await on
+    # shutdown so its cleanup runs.
+    matchmaker = asyncio.create_task(matchmaking_loop())
+    app.state.matchmaker = matchmaker
 
-    # (shutdown) later phases cancel background tasks / close sockets here.
+    try:
+        yield
+    finally:
+        matchmaker.cancel()
+        try:
+            await matchmaker
+        except asyncio.CancelledError:
+            pass

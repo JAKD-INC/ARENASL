@@ -18,12 +18,12 @@ def test_ws_auth_ok(client):
 
 
 def test_ws_unsupported_message_after_auth(client):
-    # queue.join is a valid schema but not implemented until phase 1c.
+    # `signal` is a valid schema but not implemented until phase 1d.
     token = register(client, email="echo@example.com")
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "auth", "token": token})
         assert ws.receive_json()["type"] == "auth.ok"
-        ws.send_json({"type": "queue.join"})
+        ws.send_json({"type": "signal", "data": {}})
         resp = ws.receive_json()
         assert resp["type"] == "error"
         assert resp["code"] == "unsupported"
@@ -55,6 +55,21 @@ def test_ws_create_lobby_end_to_end(client):
         assert upd["state"] == "waiting"
         assert len(upd["members"]) == 1 and upd["members"][0]["display_name"] == "Solo"
         assert len(upd["code"]) == 6
+
+
+def test_ws_queue_join_emits_warmup(client):
+    # Single socket: the real ticker runs but won't pair a lone player.
+    token = register(client, email="queue@example.com")
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "auth", "token": token})
+        assert ws.receive_json()["type"] == "auth.ok"
+        ws.send_json({"type": "queue.join"})
+        warm = ws.receive_json()
+        assert warm["type"] == "warmup.start"
+        assert isinstance(warm["word_seed"], int)
+        assert warm["dataset_version"]
+        status = ws.receive_json()
+        assert status["type"] == "queue.status" and status["position"] == 1
 
 
 def test_ws_bad_message_after_auth_gets_error_not_disconnect(client):

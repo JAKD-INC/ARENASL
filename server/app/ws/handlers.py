@@ -8,9 +8,10 @@ phases (1c–1e) land.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
-from app import lobby, state
+from app import lobby, matchmaking, state, warmup
 from app.connection_manager import manager
 from app.messages import (
     ClientMessage,
@@ -21,6 +22,10 @@ from app.messages import (
     LobbyUpdate,
     MatchFound,
     OpponentView,
+    QueueJoin,
+    QueueLeave,
+    QueueStatus,
+    WarmupStart,
     error,
 )
 from app.state import Lobby, Match, Player
@@ -40,15 +45,26 @@ async def dispatch(pid: int, msg: ClientMessage) -> None:
         await _on_lobby_join(pid, msg.code)
     elif isinstance(msg, LobbyReady):
         await _on_lobby_ready(pid, msg.ready)
+    elif isinstance(msg, QueueJoin):
+        await _on_queue_join(pid)
+    elif isinstance(msg, QueueLeave):
+        await _on_queue_leave(pid)
     else:
         await manager.send(
             pid, error("unsupported", f"'{msg.type}' is not available yet")
         )
 
 
+async def announce_match(lob: Lobby, match: Match) -> None:
+    """Tell both players a match formed: lobby is full, here are connect params."""
+    await _broadcast_lobby_update(lob)
+    await _send_match_found(match)
+
+
 async def handle_disconnect(pid: int) -> None:
-    """Clean up on socket close: leave any lobby (notifying a survivor), drop the
-    connection, and forget the player."""
+    """Clean up on socket close: leave the queue, leave any lobby (notifying a
+    survivor), drop the connection, and forget the player."""
+    matchmaking.leave_queue(pid)
     remaining = lobby.leave_lobby(pid)
     if remaining is not None:
         await _broadcast_lobby_update(remaining)
@@ -83,6 +99,32 @@ async def _on_lobby_ready(pid: int, ready: bool) -> None:
         return
     await _broadcast_lobby_update(lob)
     # The match.start gate (both ready -> duel) is added in phase 1e.
+
+
+# --- queue handlers ---------------------------------------------------------
+
+
+async def _on_queue_join(pid: int) -> None:
+    player = state.players.get(pid)
+    if player is None:
+        return
+    if player.status not in ("idle", "queued"):
+        await manager.send(pid, error("busy", "Leave your current lobby first"))
+        return
+
+    now = asyncio.get_running_loop().time()
+    matchmaking.join_queue(pid, now)
+
+    # Hand out a warmup stream and the queue position. The ticker pairs players.
+    await manager.send(
+        pid, WarmupStart(word_seed=warmup.new_seed(), dataset_version=get_dataset().version)
+    )
+    await manager.send(pid, QueueStatus(position=matchmaking.queue_position(pid)))
+
+
+async def _on_queue_leave(pid: int) -> None:
+    matchmaking.leave_queue(pid)
+    await manager.send(pid, QueueStatus(position=0))
 
 
 # --- view builders ----------------------------------------------------------

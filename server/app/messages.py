@@ -80,6 +80,17 @@ def error(code: str, message: str) -> Error:
     return Error(code=code, message=message)
 
 
+class WarmupStart(BaseModel):
+    type: Literal["warmup.start"] = "warmup.start"
+    word_seed: int
+    dataset_version: str
+
+
+class QueueStatus(BaseModel):
+    type: Literal["queue.status"] = "queue.status"
+    position: int
+
+
 class LobbyMemberView(BaseModel):
     player_id: int
     display_name: str

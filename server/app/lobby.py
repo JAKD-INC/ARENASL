@@ -102,6 +102,24 @@ def both_ready(lobby: Lobby) -> bool:
 # --- internals --------------------------------------------------------------
 
 
+def create_queue_lobby(pid_a: int, pid_b: int) -> tuple[Lobby, Match]:
+    """Form a `queue`-origin lobby with both matchmade players already in it, then
+    fill it to a Match. Both players then run the same ready-up flow as a private
+    lobby."""
+    _leave_current_lobby(pid_a)
+    _leave_current_lobby(pid_b)
+    lobby = Lobby(
+        code=_generate_code(),
+        origin="queue",
+        members=[LobbyMember(player_id=pid_a), LobbyMember(player_id=pid_b)],
+    )
+    state.lobbies[lobby.code] = lobby
+    _mark_in_lobby(pid_a, lobby.code)
+    _mark_in_lobby(pid_b, lobby.code)
+    match = _fill_to_match(lobby)
+    return lobby, match
+
+
 def _fill_to_match(lobby: Lobby) -> Match:
     host, joiner = lobby.members[0].player_id, lobby.members[1].player_id
     match = Match(

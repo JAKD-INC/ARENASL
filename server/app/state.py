@@ -41,6 +41,13 @@ class Lobby:
 
 
 @dataclass
+class QueueEntry:
+    player_id: int
+    elo: int
+    joined_at: float  # monotonic clock (loop.time()); used to widen the search window
+
+
+@dataclass
 class Match:
     """Stub created when a lobby fills; the authoritative duel state (HP, word
     stream, event log) is layered on in phase 1e."""
@@ -56,7 +63,7 @@ class Match:
 
 players: dict[int, Player] = {}
 lobbies: dict[str, Lobby] = {}
-queue: list = []  # phase 1c
+queue: list[QueueEntry] = []
 matches: dict[str, Match] = {}
 
 
