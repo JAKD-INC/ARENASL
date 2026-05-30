@@ -8,6 +8,7 @@ declared here so later phases share the same module-level stores.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 @dataclass
@@ -63,7 +64,8 @@ class Match:
     word_seed: int | None = None
     hp: dict[int, float] = field(default_factory=dict)          # pid -> remaining HP
     word_index: dict[int, int] = field(default_factory=dict)    # pid -> next word index
-    started_at: float | None = None                             # monotonic origin
+    started_at: float | None = None                             # monotonic origin (event-log offsets)
+    started_wall: datetime | None = None                        # wall clock (history row)
     winner_id: int | None = None
     event_log: list[dict] = field(default_factory=list)         # timestamped, replay backbone
 

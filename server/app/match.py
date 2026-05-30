@@ -8,6 +8,8 @@ Every state change is appended to a timestamped event log (the replay backbone).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app import state, words
 from app.config import get_settings
 
@@ -32,6 +34,7 @@ def start_match(match: state.Match, now: float) -> None:
     match.hp = {pid: MAX_HP for pid in match.player_ids}
     match.word_index = {pid: 0 for pid in match.player_ids}
     match.started_at = now
+    match.started_wall = datetime.now(timezone.utc)
     match.state = "active"
     match.event_log.append({"t": 0, "type": "start", "word_seed": match.word_seed})
     for pid in match.player_ids:

@@ -15,12 +15,18 @@ import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from pydantic import ValidationError
 
+from app import state
 from app.auth.security import decode_token
 from app.connection_manager import manager
 from app.db import SessionLocal
 from app.messages import Auth, AuthOk, client_adapter, error
 from app.models_db import User
-from app.ws.handlers import dispatch, handle_disconnect, register_player
+from app.ws.handlers import (
+    dispatch,
+    handle_disconnect,
+    register_or_reconnect,
+    resume_after_reconnect,
+)
 
 logger = logging.getLogger("arenasl.ws")
 router = APIRouter()
@@ -69,8 +75,11 @@ async def ws_endpoint(websocket: WebSocket) -> None:
         return
 
     await manager.connect(user.id, websocket)
-    register_player(user.id, user.display_name, user.elo)
-    await manager.send(user.id, AuthOk(player_id=user.id, elo=user.elo))
+    reconnected = register_or_reconnect(user.id, user.display_name, user.elo)
+    live_elo = state.players[user.id].elo
+    await manager.send(user.id, AuthOk(player_id=user.id, elo=live_elo))
+    if reconnected:
+        await resume_after_reconnect(user.id)
 
     try:
         while True:

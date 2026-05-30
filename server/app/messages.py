@@ -149,4 +149,13 @@ class MatchOver(BaseModel):
     match_id: str
     winner_id: int | None
     reason: Literal["win", "forfeit"] = "win"
-    # elo_delta is added in phase 1f
+    elo: int | None = None        # recipient's new rating
+    elo_delta: int | None = None  # recipient's change this match
+
+
+class OpponentStatus(BaseModel):
+    """Sent to the still-connected player when the opponent drops or returns."""
+
+    type: Literal["opponent.status"] = "opponent.status"
+    player_id: int
+    connected: bool

@@ -41,8 +41,10 @@ def client():
 
 @pytest.fixture
 def domain():
-    """Reset live state and load the dataset for tests that drive the domain /
-    handlers directly (no HTTP/WS server, single event loop)."""
+    """Reset live state, fresh DB schema, and load the dataset for tests that
+    drive the domain / handlers directly (no HTTP/WS server, single event loop)."""
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
     state.reset()
     manager.reset()
     init_dataset(str(_DATASET))
