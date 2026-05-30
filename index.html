@@ -12,6 +12,12 @@
   <body>
     <video id="feed" autoplay muted playsinline></video>
     <div id="message" class="message hidden" role="alert"></div>
+    <div id="overlay">
+      <div id="prompts"></div>
+      <video id="clip" autoplay loop muted playsinline></video>
+      <div id="rope"><div id="rope-marker"></div></div>
+      <div id="score">0</div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

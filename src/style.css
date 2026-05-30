@@ -42,3 +42,58 @@ body {
 .message.hidden {
   display: none;
 }
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font: 600 1.5rem/1.2 system-ui, sans-serif;
+  color: #fff;
+}
+#prompts {
+  position: absolute;
+  top: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 1rem;
+  text-shadow: 0 2px 8px #000;
+}
+.prompt { opacity: 0.55; text-transform: uppercase; }
+.prompt--current { opacity: 1; color: #6cf; font-size: 2rem; }
+#clip {
+  position: absolute;
+  top: 2rem;
+  right: 2rem;
+  width: 180px;
+  border-radius: 12px;
+  transform: scaleX(-1);          /* match the mirrored selfie feed */
+  box-shadow: 0 4px 16px #000a;
+}
+#rope {
+  position: absolute;
+  bottom: 3rem;
+  left: 10%;
+  width: 80%;
+  height: 8px;
+  background: #fff3;
+  border-radius: 4px;
+}
+#rope-marker {
+  position: absolute;
+  top: -8px;
+  width: 24px;
+  height: 24px;
+  margin-left: -12px;
+  border-radius: 50%;
+  background: #6cf;
+  transition: left 0.15s ease-out;
+}
+#score {
+  position: absolute;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 2.5rem;
+  text-shadow: 0 2px 8px #000;
+}
