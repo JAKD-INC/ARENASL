@@ -13,7 +13,7 @@ TEMPLATES_DIR = os.environ.get("ASL_TEMPLATES_DIR", "data/templates")
 SCALE = 0.5
 GET_THRESHOLD = 0.6
 CONFIRM_DROP = 0.8
-MISS_BUDGET = 6.0
+MISS_BUDGET = None  # no auto-miss/timer — advance only on a correct sign
 WINDOW_SIZE = 48  # ~1.5-2s of frames at 25-30fps
 
 _templates = load_templates(TEMPLATES_DIR)

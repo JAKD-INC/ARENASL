@@ -227,3 +227,15 @@ def test_high_plateau_no_overtake_no_dip_waits_for_miss_budget():
     assert st.confirmed is None
     assert st.current == "B"
     assert st.score == -10
+
+
+def test_no_auto_miss_when_budget_is_none():
+    # miss_budget=None disables the timer entirely: however long the player
+    # lingers on a weak sign, it never auto-misses and never advances.
+    s = _session(["A", "B"], [0.1, 0.1, 0.1], miss_budget=None)
+    s.push(_FRAME, t=0.0)
+    s.push(_FRAME, t=1000.0)
+    st = s.push(_FRAME, t=1_000_000.0)
+    assert st.event is None
+    assert st.score == 0
+    assert st.current == "A"   # still on the first prompt; no advance

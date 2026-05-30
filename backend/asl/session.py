@@ -29,7 +29,7 @@ class Session:
         *,
         get_threshold: float,
         confirm_drop: float,
-        miss_budget: float,
+        miss_budget: Optional[float],
         window_size: int,
         get_points: int = 20,
         miss_points: int = -10,
@@ -121,7 +121,9 @@ class Session:
             self._advance()
             return self.state(strength=strength, event="get", confirmed=gloss)
 
-        if t - self._target_start >= self._miss_budget:
+        # Timed auto-miss is opt-in: miss_budget=None disables it entirely, so a
+        # prompt only advances when the sign is actually performed (no time limit).
+        if self._miss_budget is not None and t - self._target_start >= self._miss_budget:
             self._score += self._miss_points
             self._advance()
             return self.state(strength=strength, event="miss")
