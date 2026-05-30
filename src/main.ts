@@ -1,15 +1,43 @@
 import { startCamera } from './camera.ts'
 import { createDetector, drawLandmarks } from './landmarks.ts'
-import { createConnection } from './net.ts'
+import { createConnection, type GameState, type LandmarkMessage } from './net.ts'
 import { createOverlay } from './overlay.ts'
 
 const video = document.querySelector<HTMLVideoElement>('#feed')!
 const message = document.querySelector<HTMLDivElement>('#message')!
 const landmarks = document.querySelector<HTMLCanvasElement>('#landmarks')!
+const debug = document.querySelector<HTMLPreElement>('#debug')!
+const clip = document.querySelector<HTMLVideoElement>('#clip')!
+const clipLandmarks = document.querySelector<HTMLCanvasElement>('#clip-landmarks')!
 
 function showMessage(text: string): void {
   message.textContent = text
   message.classList.remove('hidden')
+}
+
+// Warm the HTTP cache for upcoming reference clips so prompt changes don't stall.
+const preloaded = new Set<string>()
+function preload(glosses: string[]): void {
+  for (const g of glosses) {
+    if (preloaded.has(g)) continue
+    preloaded.add(g)
+    fetch(`/clips/${g}.mp4`).catch(() => preloaded.delete(g))
+  }
+}
+
+const bar = (v: number) => '█'.repeat(Math.round(v * 10)) + '░'.repeat(10 - Math.round(v * 10))
+const yn = (v: unknown) => (v ? '✓' : '✗')
+
+function renderDebug(state: GameState | null, msg: LandmarkMessage | null, fps: number): void {
+  const s = state
+  debug.textContent = [
+    `target  : ${s?.current ?? '—'}`,
+    `strength: ${(s?.strength ?? 0).toFixed(2)} ${bar(s?.strength ?? 0)}`,
+    `score   : ${s?.score ?? 0}`,
+    `event   : ${s?.event ?? '—'}`,
+    `hands   : L${yn(msg?.handLeft)} R${yn(msg?.handRight)}   pose ${yn(msg?.pose)}`,
+    `fps     : ${fps.toFixed(0)}`,
+  ].join('\n')
 }
 
 async function main(): Promise<void> {
@@ -30,14 +58,25 @@ async function main(): Promise<void> {
 
   const render = createOverlay({
     prompts: document.querySelector<HTMLElement>('#prompts')!,
-    clip: document.querySelector<HTMLVideoElement>('#clip')!,
+    clip,
     ropeMarker: document.querySelector<HTMLElement>('#rope-marker')!,
     score: document.querySelector<HTMLElement>('#score')!,
   })
-  const conn = createConnection({ onState: render })
-  const detect = await createDetector()
 
-  // Keep the landmark canvas matched to the viewport (device-pixel sized).
+  let latest: GameState | null = null
+  const conn = createConnection({
+    onState: (s) => {
+      latest = s
+      render(s)
+      preload(s.queue) // queue = upcoming signs; fetch their clips ahead of time
+    },
+  })
+
+  // Two independent detectors: one for the live feed, one for the demo clip
+  // (separate instances because VIDEO-mode tracking is per-stream/timestamp).
+  const detect = await createDetector()
+  const detectClip = await createDetector()
+
   const sizeCanvas = () => {
     landmarks.width = window.innerWidth
     landmarks.height = window.innerHeight
@@ -45,13 +84,33 @@ async function main(): Promise<void> {
   sizeCanvas()
   window.addEventListener('resize', sizeCanvas)
 
-  // Pump landmarks to the server each animation frame, and draw them.
+  let fps = 0
+  let prev = performance.now()
+
   const loop = () => {
+    const now = performance.now()
+    const dt = (now - prev) / 1000
+    prev = now
+    if (dt > 0) fps = fps * 0.9 + (1 / dt) * 0.1
+
+    let msg: LandmarkMessage | null = null
     if (video.readyState >= 2) {
-      const msg = detect(video, performance.now() / 1000)
+      msg = detect(video, now / 1000)
       conn.send(msg)
-      drawLandmarks(landmarks, video, msg)
+      drawLandmarks(landmarks, video, msg) // live vectors over the feed
     }
+
+    // Expected vectors from the demo clip, drawn over the (mirrored) clip box.
+    if (clip.readyState >= 2 && clip.videoWidth) {
+      if (clipLandmarks.width !== clip.clientWidth || clipLandmarks.height !== clip.clientHeight) {
+        clipLandmarks.width = clip.clientWidth
+        clipLandmarks.height = clip.clientHeight
+      }
+      const expected = detectClip(clip, now / 1000)
+      drawLandmarks(clipLandmarks, clip, expected, { fit: 'fill', mirror: false })
+    }
+
+    renderDebug(latest, msg, fps)
     requestAnimationFrame(loop)
   }
   requestAnimationFrame(loop)

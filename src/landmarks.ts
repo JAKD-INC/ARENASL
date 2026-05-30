@@ -37,7 +37,9 @@ export function drawLandmarks(
   canvas: HTMLCanvasElement,
   video: HTMLVideoElement,
   msg: LandmarkMessage,
+  opts: { fit?: 'cover' | 'fill'; mirror?: boolean } = {},
 ): void {
+  const { fit = 'cover', mirror = true } = opts
   const ctx = canvas.getContext('2d')
   const { width: cw, height: ch } = canvas
   if (!ctx) return
@@ -46,14 +48,17 @@ export function drawLandmarks(
   const vh = video.videoHeight
   if (!vw || !vh) return
 
-  // Replicate object-fit: cover (scale to fill, center-crop) + horizontal mirror.
-  const scale = Math.max(cw / vw, ch / vh)
-  const ox = (cw - vw * scale) / 2
-  const oy = (ch - vh * scale) / 2
-  const map = (p: number[]): [number, number] => [
-    cw - (ox + p[0] * vw * scale), // mirror X to match transform: scaleX(-1)
-    oy + p[1] * vh * scale,
-  ]
+  // 'cover' = scale-to-fill + center-crop (the fullscreen feed); 'fill' =
+  // stretch to the box (the small reference clip). mirror matches scaleX(-1).
+  const scale = fit === 'cover' ? Math.max(cw / vw, ch / vh) : 0
+  const sx = fit === 'cover' ? scale : cw / vw
+  const sy = fit === 'cover' ? scale : ch / vh
+  const ox = (cw - vw * sx) / 2
+  const oy = (ch - vh * sy) / 2
+  const map = (p: number[]): [number, number] => {
+    const x = ox + p[0] * vw * sx
+    return [mirror ? cw - x : x, oy + p[1] * vh * sy]
+  }
 
   const dot = (p: number[], r: number, color: string) => {
     const [x, y] = map(p)

@@ -12,10 +12,14 @@
   <body>
     <video id="feed" autoplay muted playsinline></video>
     <canvas id="landmarks"></canvas>
+    <pre id="debug"></pre>
     <div id="message" class="message hidden" role="alert"></div>
     <div id="overlay">
       <div id="prompts"></div>
-      <video id="clip" autoplay loop muted playsinline></video>
+      <div id="clip-box">
+        <video id="clip" autoplay loop muted playsinline></video>
+        <canvas id="clip-landmarks"></canvas>
+      </div>
       <div id="rope"><div id="rope-marker"></div></div>
       <div id="score">0</div>
     </div>
