@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app import lobby, matchmaking, results, signaling, state, turn, warmup
+from app import lobby, matchmaking, replay, results, signaling, state, turn, warmup
 from app import match as match_engine
 from app.config import get_settings
 from app.connection_manager import manager
@@ -212,7 +212,11 @@ async def _on_sign_attempt(pid: int, word_index: int, accuracy: float) -> None:
 async def _finalize_match(match: Match, reason: str) -> None:
     """End a match: apply ELO + write history (off the loop), tell both players
     their result, then tear down live state."""
-    deltas = await asyncio.to_thread(results.persist_match_result, match, reason)
+    deltas, history_id = await asyncio.to_thread(results.persist_match_result, match, reason)
+    try:
+        await asyncio.to_thread(replay.finalize_match, match, history_id, reason)
+    except Exception:  # replay is best-effort, never block the result
+        logger.exception("replay finalize failed for match %s", match.id)
     for pid in match.player_ids:
         new_elo, delta = deltas.get(pid, (None, None))
         player = state.players.get(pid)

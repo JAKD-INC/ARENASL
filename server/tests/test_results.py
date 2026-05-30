@@ -37,10 +37,11 @@ def test_persist_updates_elo_and_writes_history(domain):
     w, l = _two_users()
     match = _finished_match(winner=w, players=(w, l))
 
-    deltas = results.persist_match_result(match, reason="win")
+    deltas, history_id = results.persist_match_result(match, reason="win")
 
     assert deltas[w][1] > 0  # winner gained
     assert deltas[l][1] < 0  # loser lost
+    assert history_id is not None
 
     with SessionLocal() as db:
         assert db.get(User, w).elo > 1200
@@ -48,6 +49,7 @@ def test_persist_updates_elo_and_writes_history(domain):
         assert db.get(User, w).games_played == 1
         assert db.get(User, l).games_played == 1
         hist = db.scalars(select(MatchHistory)).one()
+        assert hist.id == history_id
         assert hist.winner_id == w
         assert hist.end_reason == "win"
 
@@ -62,4 +64,4 @@ def test_persist_records_forfeit_reason(domain):
 
 def test_persist_no_users_returns_empty(domain):
     match = _finished_match(winner=999, players=(999, 1000))
-    assert results.persist_match_result(match, reason="win") == {}
+    assert results.persist_match_result(match, reason="win") == ({}, None)

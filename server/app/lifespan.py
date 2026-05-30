@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.db import engine
 from app.matchmaking import matchmaking_loop
 from app.models_db import Base
+from app.replay import retention_loop
 from app.words import init_dataset
 
 logger = logging.getLogger("arenasl")
@@ -34,16 +35,20 @@ async def lifespan(app: FastAPI):
         len(dataset.entries),
     )
 
-    # Background matchmaking ticker. Keep a strong reference; cancel + await on
-    # shutdown so its cleanup runs.
-    matchmaker = asyncio.create_task(matchmaking_loop())
-    app.state.matchmaker = matchmaker
+    # Background tasks. Keep strong references; cancel + await on shutdown.
+    tasks = [
+        asyncio.create_task(matchmaking_loop()),
+        asyncio.create_task(retention_loop()),
+    ]
+    app.state.background_tasks = tasks
 
     try:
         yield
     finally:
-        matchmaker.cancel()
-        try:
-            await matchmaker
-        except asyncio.CancelledError:
-            pass
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

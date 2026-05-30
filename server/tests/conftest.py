@@ -17,6 +17,11 @@ os.environ.setdefault("DB_URL", f"sqlite:///{_DB_PATH}")
 _DATASET = pathlib.Path(__file__).resolve().parent.parent / "app" / "data" / "signs.json"
 os.environ.setdefault("SIGNS_DATASET_PATH", str(_DATASET))
 
+_REPLAY_DIR = tempfile.mkdtemp(prefix="arenasl-replays-")
+os.environ.setdefault("REPLAY_DIR", _REPLAY_DIR)
+
+import shutil  # noqa: E402
+
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -28,6 +33,13 @@ from app.models_db import Base  # noqa: E402
 from app.words import init_dataset  # noqa: E402
 
 
+def _clear_replays() -> None:
+    root = pathlib.Path(_REPLAY_DIR)
+    if root.exists():
+        for child in root.iterdir():
+            shutil.rmtree(child, ignore_errors=True)
+
+
 @pytest.fixture
 def client():
     """Fresh schema and live state per test, with the app lifespan running."""
@@ -35,6 +47,7 @@ def client():
     Base.metadata.create_all(engine)
     state.reset()
     manager.reset()
+    _clear_replays()
     with TestClient(app) as c:
         yield c
 
@@ -47,6 +60,7 @@ def domain():
     Base.metadata.create_all(engine)
     state.reset()
     manager.reset()
+    _clear_replays()
     init_dataset(str(_DATASET))
     yield
     state.reset()
