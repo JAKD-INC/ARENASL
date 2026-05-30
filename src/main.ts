@@ -4,13 +4,16 @@ import { MockDriver } from './game/mockDriver.ts'
 import { Hud } from './ui/hud.ts'
 import { Vfx } from './ui/vfx.ts'
 import { ResultsScreen } from './ui/results.ts'
-import { MediaPipePoseProvider } from './ui/skins/landmarkProvider.mediapipe.ts'
-import { SkinRenderer } from './ui/skins/renderer.ts'
-import { SkinPicker } from './ui/skins/picker.ts'
+import { MediaPipeLandmarkProvider } from './ui/lenses/landmarkProvider.mediapipe.ts'
+import { createColorFilterRenderer } from './ui/filters/colorFilter.ts'
+import { LensRenderer } from './ui/lenses/lensRenderer.ts'
+import { LookController } from './ui/looks/controller.ts'
+import { LookPicker } from './ui/looks/picker.ts'
 
 const video = document.querySelector<HTMLVideoElement>('#feed')!
 const message = document.querySelector<HTMLDivElement>('#message')!
-const skinsCanvas = document.querySelector<HTMLCanvasElement>('#skins')!
+const filterCanvas = document.querySelector<HTMLCanvasElement>('#filter')!
+const lensCanvas = document.querySelector<HTMLCanvasElement>('#lens')!
 const vfxCanvas = document.querySelector<HTMLCanvasElement>('#vfx')!
 const hudRoot = document.querySelector<HTMLDivElement>('#hud')!
 const pickerRoot = document.querySelector<HTMLDivElement>('#picker')!
@@ -66,13 +69,22 @@ async function main(): Promise<void> {
     driver.start()
   }
 
-  // --- skins layer (face-anchored via standalone MediaPipe) + lobby ---
-  const landmarks = new MediaPipePoseProvider(video)
-  const renderer = new SkinRenderer(skinsCanvas, video, landmarks)
-  renderer.start()
-  new SkinPicker(pickerRoot, video, renderer, () => void startMatch())
-  // MediaPipe model loads from CDN; if it fails (offline), skins simply won't
-  // anchor — the rest of the overlay is unaffected.
+  // --- looks layer: face lenses + color filters (WebGL) ---
+  // The face-mesh landmark provider feeds the lens renderer. The color pass is
+  // pure WebGL over the video and needs no model.
+  const landmarks = new MediaPipeLandmarkProvider(video)
+
+  const colorRenderer = createColorFilterRenderer(filterCanvas, video)
+  colorRenderer?.startLoop()
+
+  const lensRenderer = new LensRenderer(lensCanvas, video, landmarks)
+  lensRenderer.start()
+
+  const looks = new LookController(video, colorRenderer, lensRenderer)
+  new LookPicker(pickerRoot, looks, () => void startMatch())
+
+  // MediaPipe model loads from CDN; if it fails (offline), lenses simply won't
+  // anchor — color filters and the rest of the overlay still work.
   landmarks.start().catch((err) => console.warn('Landmark provider unavailable:', err))
 }
 

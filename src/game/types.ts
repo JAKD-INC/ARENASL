@@ -117,22 +117,33 @@ export interface ReplayData {
   timeline: SignEvent[]
 }
 
-// --- Skins / landmarks ------------------------------------------------------
+// --- Landmarks --------------------------------------------------------------
 
 /** A normalized 2D point (0..1 of the video frame), x already un-mirrored. */
 export interface Landmark {
   x: number
   y: number
+  /** Optional relative depth (smaller = closer), when the model supplies it. */
+  z?: number
 }
+
+/**
+ * ARKit-style face blendshape scores (0..1) keyed by category name
+ * (e.g. `jawOpen`, `mouthSmileLeft`, `browInnerUp`, `tongueOut`). Lens triggers
+ * read these to react to expressions. See {@link BlendshapeName}.
+ */
+export type Blendshapes = Record<string, number>
 
 /** A single frame of detected landmarks for the local player. */
 export interface LandmarkFrame {
-  /** Face mesh points, if a face was detected this frame. */
+  /** Face mesh points (MediaPipe FaceLandmarker: 478 keypoints), if detected. */
   face: Landmark[] | null
   /** Hand points per detected hand. */
   hands: Landmark[][]
   /** Body pose points (MediaPipe Pose: 33 keypoints), if a body was detected. */
   pose: Landmark[] | null
+  /** Facial expression scores for the detected face, if any. */
+  blendshapes: Blendshapes | null
   /** Frame timestamp in ms. */
   atMs: number
 }
@@ -147,36 +158,4 @@ export interface LandmarkProvider {
   stop(): void
   /** Latest frame, or null if nothing detected yet. */
   latest(): LandmarkFrame | null
-}
-
-export type SkinKind = 'none' | 'css-filter' | 'costume'
-
-/** Where a costume sprite is anchored on the detected body. */
-export type CostumeAnchor = 'head' | 'torso'
-
-export interface CostumeLayer {
-  /** Sprite image URL (transparent PNG/WebP). */
-  src: string
-  anchor: CostumeAnchor
-  /**
-   * Sprite width as a multiple of the reference width — head width for `head`
-   * anchors, shoulder width for `torso` anchors.
-   */
-  scale: number
-  /** Vertical nudge as a fraction of the reference width (negative = up). */
-  offsetY?: number
-}
-
-export interface SkinDefinition {
-  id: string
-  name: string
-  kind: SkinKind
-  /** Accent color used by the picker swatch fallback. */
-  accent: string
-  /** For css-filter skins: a CSS `filter` value applied to the video element. */
-  cssFilter?: string
-  /** For costume skins: pose-anchored sprite layers, drawn in array order. */
-  costume?: CostumeLayer[]
-  /** Optional picker thumbnail image (e.g. the costume's hat sprite). */
-  thumb?: string
 }

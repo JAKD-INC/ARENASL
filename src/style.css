@@ -34,12 +34,13 @@
 
   --font: 500 1rem/1.5 'Outfit', system-ui, -apple-system, 'Segoe UI', sans-serif;
 
-  --z-skins: 1;
-  --z-vfx: 2;
-  --z-hud: 3;
-  --z-lobby: 4;
-  --z-results: 5;
-  --z-message: 6;
+  --z-filter: 1;
+  --z-lens: 2;
+  --z-vfx: 3;
+  --z-hud: 4;
+  --z-lobby: 5;
+  --z-results: 6;
+  --z-message: 7;
 }
 
 * {
@@ -76,7 +77,8 @@ body {
   transition: filter 0.25s ease;
 }
 
-#skins,
+#filter,
+#lens,
 #vfx {
   position: fixed;
   inset: 0;
@@ -84,8 +86,15 @@ body {
   height: 100vh;
   pointer-events: none;
 }
-#skins {
-  z-index: var(--z-skins);
+/* WebGL color pass: opaque, covers the raw feed; hidden until a filter is set.
+   The shader handles the selfie mirror, so no CSS transform here. */
+#filter {
+  z-index: var(--z-filter);
+  display: none;
+  object-fit: cover;
+}
+#lens {
+  z-index: var(--z-lens);
 }
 #vfx {
   z-index: var(--z-vfx);
@@ -377,6 +386,38 @@ body {
   margin-top: 2px;
 }
 
+/* category tabs (Lenses / Filters) */
+.look-tabs {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.look-tab {
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-dim);
+  box-shadow: var(--shadow-soft);
+  transition:
+    transform 0.12s var(--spring),
+    background 0.15s ease,
+    color 0.15s ease;
+}
+.look-tab.active {
+  background: var(--ink-900);
+  color: #fff;
+}
+.look-tab:active {
+  transform: scale(0.94);
+}
+
 .skin-swatches {
   display: flex;
   gap: 14px;
@@ -419,10 +460,26 @@ body {
   place-items: center;
 }
 
-.skin-thumb-img {
-  width: 88%;
-  height: 88%;
-  object-fit: contain;
+/* emoji thumbnail for lenses + the ✕ on the None chip */
+.look-glyph {
+  font-size: 2.2rem;
+  line-height: 1;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.25));
+}
+.look-none {
+  background: repeating-linear-gradient(
+    45deg,
+    #eef1f3,
+    #eef1f3 8px,
+    #e3e8eb 8px,
+    #e3e8eb 16px
+  );
+}
+.look-none .look-glyph {
+  font-size: 1.5rem;
+  font-weight: 900;
+  color: #8a929a;
+  filter: none;
 }
 .skin-swatch:active .skin-thumb {
   transform: scale(0.95);
