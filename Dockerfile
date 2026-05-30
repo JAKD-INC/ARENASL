@@ -31,6 +31,8 @@ RUN mkdir -p /app/public/models \
 
 COPY backend/ /app/backend/
 COPY --from=frontend /app/dist /app/dist
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Templates + reference clips live on a mounted volume (written by the builder);
 # models + built frontend are baked into the image.
@@ -41,4 +43,5 @@ ENV ASL_TEMPLATES_DIR=/data/templates \
     PYTHONUNBUFFERED=1
 
 EXPOSE 8000
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000"]
