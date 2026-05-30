@@ -12,6 +12,7 @@ import asyncio
 import logging
 
 from app import lobby, matchmaking, signaling, state, turn, warmup
+from app import match as match_engine
 from app.connection_manager import manager
 from app.messages import (
     ClientMessage,
@@ -21,11 +22,16 @@ from app.messages import (
     LobbyReady,
     LobbyUpdate,
     MatchFound,
+    MatchOver,
+    MatchStart,
+    MatchState,
     OpponentView,
+    PlayerState,
     QueueJoin,
     QueueLeave,
     QueueStatus,
     Signal,
+    SignAttempt,
     WarmupStart,
     error,
 )
@@ -52,6 +58,8 @@ async def dispatch(pid: int, msg: ClientMessage) -> None:
         await _on_queue_leave(pid)
     elif isinstance(msg, Signal):
         await _on_signal(pid, msg.data)
+    elif isinstance(msg, SignAttempt):
+        await _on_sign_attempt(pid, msg.word_index, msg.accuracy)
     else:
         await manager.send(
             pid, error("unsupported", f"'{msg.type}' is not available yet")
@@ -101,7 +109,78 @@ async def _on_lobby_ready(pid: int, ready: bool) -> None:
         await manager.send(pid, error(exc.code, exc.message))
         return
     await _broadcast_lobby_update(lob)
-    # The match.start gate (both ready -> duel) is added in phase 1e.
+
+    # Both joined and both ready -> start the duel.
+    if lob.match_id and lobby.both_ready(lob):
+        match = state.matches.get(lob.match_id)
+        if match is not None and match.state == "connecting":
+            await _start_duel(match)
+
+
+async def _start_duel(match: Match) -> None:
+    now = asyncio.get_running_loop().time()
+    match_engine.start_match(match, now)
+    await manager.broadcast(
+        match.player_ids, MatchStart(match_id=match.id, word_seed=match.word_seed)
+    )
+    await _broadcast_match_state(match)
+
+
+# --- sign attempts (authoritative duel) -------------------------------------
+
+
+async def _on_sign_attempt(pid: int, word_index: int, accuracy: float) -> None:
+    match = _current_match(pid)
+    if match is None:
+        await manager.send(pid, error("not_in_match", "You are not in a match"))
+        return
+    now = asyncio.get_running_loop().time()
+    try:
+        finished = match_engine.handle_attempt(match, pid, word_index, accuracy, now)
+    except match_engine.MatchError as exc:
+        await manager.send(pid, error(exc.code, exc.message))
+        return
+
+    await _broadcast_match_state(match)
+    if finished:
+        await manager.broadcast(
+            match.player_ids,
+            MatchOver(match_id=match.id, winner_id=match.winner_id, reason="win"),
+        )
+        _teardown_match(match)
+
+
+def _current_match(pid: int) -> Match | None:
+    player = state.players.get(pid)
+    mid = player.match_id if player is not None else None
+    return state.matches.get(mid) if mid else None
+
+
+def _match_state(match: Match) -> MatchState:
+    return MatchState(
+        match_id=match.id,
+        players=[
+            PlayerState(player_id=pid, hp=round(match.hp[pid], 2), word_index=match.word_index[pid])
+            for pid in match.player_ids
+        ],
+    )
+
+
+async def _broadcast_match_state(match: Match) -> None:
+    await manager.broadcast(match.player_ids, _match_state(match))
+
+
+def _teardown_match(match: Match) -> None:
+    """Clear live state after a match ends. (Persistence + ELO land in 1f;
+    replay finalize in 1g.)"""
+    for pid in match.player_ids:
+        player = state.players.get(pid)
+        if player is not None:
+            player.status = "idle"
+            player.match_id = None
+            player.lobby_code = None
+    state.matches.pop(match.id, None)
+    state.lobbies.pop(match.lobby_code, None)
 
 
 # --- queue handlers ---------------------------------------------------------

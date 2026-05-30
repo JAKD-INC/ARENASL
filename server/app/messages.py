@@ -121,3 +121,32 @@ class MatchFound(BaseModel):
     dataset_version: str
     opponent: OpponentView
     ice_servers: list[dict] = []
+
+
+class MatchStart(BaseModel):
+    """Both ready -> the duel begins. Carries the duel's deterministic params."""
+
+    type: Literal["match.start"] = "match.start"
+    match_id: str
+    word_seed: int
+    record_start_ms: int = 0  # shared clock origin for replay
+
+
+class PlayerState(BaseModel):
+    player_id: int
+    hp: float
+    word_index: int
+
+
+class MatchState(BaseModel):
+    type: Literal["match.state"] = "match.state"
+    match_id: str
+    players: list[PlayerState]
+
+
+class MatchOver(BaseModel):
+    type: Literal["match.over"] = "match.over"
+    match_id: str
+    winner_id: int | None
+    reason: Literal["win", "forfeit"] = "win"
+    # elo_delta is added in phase 1f

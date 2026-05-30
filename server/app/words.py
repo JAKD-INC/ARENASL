@@ -11,8 +11,11 @@ Phase 1a implements loading + lookup. The seeded PRNG word stream lands in 1e.
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass
 from pathlib import Path
+
+_MASK64 = (1 << 64) - 1
 
 
 @dataclass(frozen=True)
@@ -96,3 +99,28 @@ def get_dataset() -> SignDataset:
     if _dataset is None:
         raise RuntimeError("sign dataset not loaded; call init_dataset() at startup")
     return _dataset
+
+
+# --- deterministic word stream ----------------------------------------------
+#
+# Both client and server must generate the IDENTICAL word at a given index from a
+# shared seed. We pin an explicit SplitMix64 mixer (not a language built-in, which
+# differ across runtimes) so the JS client can reproduce it exactly. word_at is
+# stateless per index, so a player can be scored at any position independently.
+
+
+def _splitmix64(seed: int, index: int) -> int:
+    z = (seed + index * 0x9E3779B97F4A7C15) & _MASK64
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _MASK64
+    return (z ^ (z >> 31)) & _MASK64
+
+
+def word_at(seed: int, index: int, dataset: SignDataset | None = None) -> SignEntry:
+    ds = dataset or get_dataset()
+    return ds.entries[_splitmix64(seed, index) % len(ds.entries)]
+
+
+def random_seed() -> int:
+    """A fresh, unpredictable seed for a match's word stream (31-bit, JS-safe)."""
+    return secrets.randbits(31)

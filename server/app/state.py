@@ -50,14 +50,22 @@ class QueueEntry:
 
 @dataclass
 class Match:
-    """Stub created when a lobby fills; the authoritative duel state (HP, word
-    stream, event log) is layered on in phase 1e."""
+    """Created when a lobby fills (connecting), activated when both players ready
+    (the authoritative duel), then finished."""
 
     id: str
     player_ids: tuple[int, int]
     roles: dict[int, str]  # pid -> "offerer" | "answerer"
     lobby_code: str
     state: str = "connecting"  # connecting | active | finished
+
+    # --- authoritative duel state (set at start_match, phase 1e) ---
+    word_seed: int | None = None
+    hp: dict[int, float] = field(default_factory=dict)          # pid -> remaining HP
+    word_index: dict[int, int] = field(default_factory=dict)    # pid -> next word index
+    started_at: float | None = None                             # monotonic origin
+    winner_id: int | None = None
+    event_log: list[dict] = field(default_factory=list)         # timestamped, replay backbone
 
 
 # --- module-level stores ----------------------------------------------------

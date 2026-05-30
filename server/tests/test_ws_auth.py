@@ -17,8 +17,7 @@ def test_ws_auth_ok(client):
         assert isinstance(msg["player_id"], int)
 
 
-def test_ws_unsupported_message_after_auth(client):
-    # `sign.attempt` is a valid schema but not implemented until phase 1e.
+def test_ws_sign_attempt_without_match_errors(client):
     token = register(client, email="echo@example.com")
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "auth", "token": token})
@@ -26,7 +25,7 @@ def test_ws_unsupported_message_after_auth(client):
         ws.send_json({"type": "sign.attempt", "word_index": 0, "accuracy": 1.0})
         resp = ws.receive_json()
         assert resp["type"] == "error"
-        assert resp["code"] == "unsupported"
+        assert resp["code"] == "not_in_match"
 
 
 def test_ws_bad_token_is_closed(client):
