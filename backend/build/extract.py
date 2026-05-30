@@ -1,4 +1,8 @@
 """Extract unified-schema landmark frames from a video using MediaPipe Tasks."""
+import os
+# Silence MediaPipe/TFLite's harmless per-init chatter ("Feedback manager ...",
+# XNNPACK delegate INFO). Must be set before importing mediapipe. 2 = errors only.
+os.environ.setdefault("GLOG_minloglevel", "2")
 from pathlib import Path
 import cv2
 import mediapipe as mp

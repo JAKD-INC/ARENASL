@@ -26,6 +26,10 @@ services:
       - /data/clips
       - --per-gloss
       - "8"
+    # HF_TOKEN (from host env) raises HuggingFace rate limits for large parallel
+    # builds — strongly recommended for --all. Passed through, never baked in.
+    environment:
+      - HF_TOKEN
     volumes:
       - asl-data:/data
 
