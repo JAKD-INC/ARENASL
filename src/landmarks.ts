@@ -20,6 +20,67 @@ export function splitHands(
 const toXYZ = (lms: { x: number; y: number; z: number }[]): XYZ =>
   lms.map((l) => [l.x, l.y, l.z])
 
+// MediaPipe hand skeleton (21-landmark) bone pairs.
+const HAND_BONES: [number, number][] = [
+  [0, 1], [1, 2], [2, 3], [3, 4],          // thumb
+  [0, 5], [5, 6], [6, 7], [7, 8],          // index
+  [5, 9], [9, 10], [10, 11], [11, 12],     // middle
+  [9, 13], [13, 14], [14, 15], [15, 16],   // ring
+  [13, 17], [17, 18], [18, 19], [19, 20],  // pinky
+  [0, 17],                                  // palm base
+]
+
+/** Draw the detected pose + hand vectors onto a full-viewport canvas, mapping
+ *  normalized [0,1] coords through the video's object-fit:cover crop and the
+ *  selfie mirror so they line up with the displayed feed. Debug visualization. */
+export function drawLandmarks(
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  msg: LandmarkMessage,
+): void {
+  const ctx = canvas.getContext('2d')
+  const { width: cw, height: ch } = canvas
+  if (!ctx) return
+  ctx.clearRect(0, 0, cw, ch)
+  const vw = video.videoWidth
+  const vh = video.videoHeight
+  if (!vw || !vh) return
+
+  // Replicate object-fit: cover (scale to fill, center-crop) + horizontal mirror.
+  const scale = Math.max(cw / vw, ch / vh)
+  const ox = (cw - vw * scale) / 2
+  const oy = (ch - vh * scale) / 2
+  const map = (p: number[]): [number, number] => [
+    cw - (ox + p[0] * vw * scale), // mirror X to match transform: scaleX(-1)
+    oy + p[1] * vh * scale,
+  ]
+
+  const dot = (p: number[], r: number, color: string) => {
+    const [x, y] = map(p)
+    ctx.fillStyle = color
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  const skeleton = (pts: XYZ, color: string) => {
+    ctx.strokeStyle = color
+    ctx.lineWidth = 2
+    for (const [a, b] of HAND_BONES) {
+      const [ax, ay] = map(pts[a])
+      const [bx, by] = map(pts[b])
+      ctx.beginPath()
+      ctx.moveTo(ax, ay)
+      ctx.lineTo(bx, by)
+      ctx.stroke()
+    }
+    for (const p of pts) dot(p, 3, color)
+  }
+
+  if (msg.pose) for (const p of msg.pose) dot(p, 3, 'rgba(0,255,128,0.7)')
+  if (msg.handLeft) skeleton(msg.handLeft, '#6cf')
+  if (msg.handRight) skeleton(msg.handRight, '#f6c')
+}
+
 export async function createDetector() {
   // Dynamic import keeps the browser-only MediaPipe lib out of the module's
   // static graph, so unit tests (node env) can import splitHands without it.
