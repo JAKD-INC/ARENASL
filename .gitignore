@@ -7,3 +7,4 @@ backend/.venv/
 __pycache__/
 *.pyc
 public/models/
+.env

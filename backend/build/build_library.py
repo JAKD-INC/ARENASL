@@ -1,8 +1,9 @@
 """Build reference templates + display clips from WLASL (HuggingFace).
 
 Clip extraction is parallelized across processes — each worker downloads its
-clip and runs MediaPipe independently, so a full ~2000-gloss build uses every
-core instead of plodding one clip at a time.
+clip and runs MediaPipe independently. The pool is run in memory-bounded batches
+and tolerates worker crashes (a dead worker skips its batch instead of aborting
+the whole build), so a full ~2000-gloss run survives OOMs and bad clips.
 """
 import argparse
 import json
@@ -11,6 +12,7 @@ import os
 import shutil
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 import numpy as np
 from huggingface_hub import hf_hub_download
@@ -77,32 +79,48 @@ def build(glosses, out_dir, clips_dir, per_gloss, workers):
     if missing:
         print(f"WARN: {len(missing)} gloss(es) absent from dataset: {missing[:10]}"
               + (" ..." if len(missing) > 10 else ""))
-    print(f"Extracting {len(tasks)} clips across {len(glosses)} glosses "
-          f"with {workers} workers...")
+    total = len(tasks)
+    print(f"Extracting {total} clips across {len(glosses)} glosses "
+          f"with {workers} workers (~0.5-1GB RAM each)...")
 
-    kept = defaultdict(int)        # gloss -> templates written so far
-    have_display = set()           # glosses with a display clip copied
-    done = 0
     # spawn (not fork): MediaPipe holds native/GL state that doesn't survive fork.
     ctx = mp.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as ex:
-        futures = [ex.submit(_process_clip, t) for t in tasks]
-        for fut in as_completed(futures):
-            gloss, fp, seq, info = fut.result()
-            done += 1
-            if seq is None:
-                continue
-            idx = kept[gloss]
-            np.save(out_dir / f"{gloss}__{idx}.npy", seq)
-            kept[gloss] += 1
-            if gloss not in have_display:  # first usable clip -> overlay clip
-                shutil.copy(info, clips_dir / f"{gloss}.mp4")
-                have_display.add(gloss)
-            if done % 50 == 0 or done == len(tasks):
-                print(f"  [{done}/{len(tasks)}] {len(have_display)} glosses ready")
+    have_display = set()       # glosses with a display clip copied
+    written = 0
+    # Run in batches with a fresh, recycling pool per batch. This bounds memory
+    # and isolates worker crashes: an OOM/segfault aborts only the current batch.
+    batch_size = max(workers * 8, 16)
+    for start in range(0, total, batch_size):
+        batch = tasks[start:start + batch_size]
+        try:
+            with ProcessPoolExecutor(
+                max_workers=workers, mp_context=ctx, max_tasks_per_child=10
+            ) as ex:
+                futures = {ex.submit(_process_clip, t): t for t in batch}
+                for fut in as_completed(futures):
+                    try:
+                        gloss, fp, seq, info = fut.result()
+                    except Exception as exc:
+                        print(f"  worker died on {futures[fut][1]}: {exc}")
+                        continue
+                    if seq is None:
+                        continue
+                    # Name by video id (deterministic) so re-runs overwrite rather
+                    # than create duplicate templates. load_templates groups on the
+                    # text before the last '__', i.e. the gloss.
+                    vid = Path(fp).stem
+                    np.save(out_dir / f"{gloss}__{vid}.npy", seq)
+                    written += 1
+                    if gloss not in have_display:  # first usable clip -> overlay clip
+                        shutil.copy(info, clips_dir / f"{gloss}.mp4")
+                        have_display.add(gloss)
+        except BrokenProcessPool:
+            print(f"  ! batch crashed near {start}/{total} (likely OOM — lower "
+                  f"--workers). Skipping it and continuing.")
+        print(f"  [{min(start + batch_size, total)}/{total}] "
+              f"{written} templates, {len(have_display)} glosses ready")
 
-    usable = sum(1 for g in glosses if kept[g])
-    print(f"Done: {sum(kept.values())} templates across {usable}/{len(glosses)} glosses.")
+    print(f"Done: {written} templates across {len(have_display)} glosses.")
 
 
 if __name__ == "__main__":
@@ -115,7 +133,10 @@ if __name__ == "__main__":
     p.add_argument("--out", default="data/templates")
     p.add_argument("--clips", default="../public/clips")
     p.add_argument("--per-gloss", type=int, default=8)
-    p.add_argument("--workers", type=int, default=os.cpu_count() or 4)
+    # Capped at 16: each worker holds a full MediaPipe stack (~0.5-1GB), so
+    # oversubscribing cores OOMs. Batches + crash-tolerance keep a too-high count
+    # from aborting the run, but stay within RAM. Override with --workers.
+    p.add_argument("--workers", type=int, default=min(os.cpu_count() or 4, 16))
     a = p.parse_args()
     if a.all:
         chosen = None
