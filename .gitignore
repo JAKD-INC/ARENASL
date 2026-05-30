@@ -3,3 +3,9 @@ dist
 docs/
 *.local
 .DS_Store
+.aidesigner/
+
+# Local agent / editor tooling (regenerable; not project source)
+.agents/
+.claude/
+.mcp.json

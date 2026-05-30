@@ -4,13 +4,24 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <title>ARENASL</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <video id="feed" autoplay muted playsinline></video>
+    <canvas id="skins"></canvas>
+    <canvas id="vfx"></canvas>
+    <div id="hud"></div>
+    <div id="picker"></div>
+    <div id="results"></div>
     <div id="message" class="message hidden" role="alert"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
