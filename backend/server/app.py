@@ -1,5 +1,6 @@
 import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 from asl.library import load_templates
 from asl.matcher import Matcher
 from asl.session import Session
@@ -38,3 +39,19 @@ async def ws(websocket: WebSocket):
                 await websocket.send_json(out)
     except WebSocketDisconnect:
         pass
+
+
+def _mount(env_var: str, route: str, *, html: bool = False) -> None:
+    """Mount a static dir if its env var points at an existing directory.
+
+    Skipped (so unit tests run without these) unless the dir exists. The "/"
+    SPA mount is added last so /ws and /clips, /models take precedence."""
+    directory = os.environ.get(env_var)
+    if directory and os.path.isdir(directory):
+        name = route.strip("/") or "root"
+        app.mount(route, StaticFiles(directory=directory, html=html), name=name)
+
+
+_mount("ASL_CLIPS_DIR", "/clips")          # reference clips (built into the volume)
+_mount("ASL_MODELS_DIR", "/models")        # MediaPipe .task models
+_mount("ASL_DIST_DIR", "/", html=True)     # built frontend (SPA) — must be last

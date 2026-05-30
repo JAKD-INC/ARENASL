@@ -1,0 +1,44 @@
+# ARENASL — dockerized live app.
+#
+# One-time, build the WLASL reference templates into the shared volume:
+#     docker compose run --rm builder
+#   (override vocab/size: docker compose run --rm builder \
+#       python -m build.build_library --out /data/templates --clips /data/clips \
+#       --glosses book drink help --per-gloss 4)
+#
+# Then run the app and open http://localhost:8000 (camera works on localhost):
+#     docker compose up app
+#
+# The app reads templates from the volume at startup, so the builder must run first.
+
+services:
+  # One-shot: download a WLASL subset, extract MediaPipe landmarks, write
+  # <gloss>__N.npy templates + one display clip per gloss into the volume.
+  builder:
+    build: .
+    image: arenasl:latest
+    command:
+      - python
+      - -m
+      - build.build_library
+      - --out
+      - /data/templates
+      - --clips
+      - /data/clips
+      - --per-gloss
+      - "8"
+    volumes:
+      - asl-data:/data
+
+  # The live server: serves the built frontend, /clips, /models, and /ws.
+  app:
+    build: .
+    image: arenasl:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - asl-data:/data
+    restart: unless-stopped
+
+volumes:
+  asl-data:
