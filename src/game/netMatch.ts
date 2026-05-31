@@ -46,6 +46,7 @@ export class NetMatchDriver {
     this.off.push(this.net.on((e) => this.onEvent(e)))
     const loop = (ts: number): void => {
       this.rafId = requestAnimationFrame(loop)
+      this.store.tick() // drive the elapsed-time clock (MockDriver does this offline)
       this.stream(ts)
     }
     this.rafId = requestAnimationFrame(loop)
