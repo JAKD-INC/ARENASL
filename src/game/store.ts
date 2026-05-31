@@ -9,7 +9,7 @@ import type {
   Word,
 } from './types.ts'
 import { WordStream } from './words.ts'
-import { ACCEPT_THRESHOLD, MAX_HP, damage, points } from './scoring.ts'
+import { ACCEPT_THRESHOLD, MAX_HP, damage, damageRamp, points } from './scoring.ts'
 
 /**
  * Central game store: holds {@link GameState}, runs the match finite-state
@@ -18,8 +18,11 @@ import { ACCEPT_THRESHOLD, MAX_HP, damage, points } from './scoring.ts'
  *
  * Tug-of-war (live): every accepted sign deals `complexity × accuracy` damage to
  * the other player and heals the signer the same amount, clamped to 0..MAX_HP.
- * The match ends the instant either player's HP hits 0 — HP is tracked here in
- * real time but, per "solo focus", is never shown during the race; it (and the
+ * That base hit is scaled by {@link damageRamp}, which grows exponentially with
+ * match time, so hits get bigger the longer the match runs and HP is guaranteed
+ * to reach 0 — the match ends deterministically with no fixed time cap. The
+ * match ends the instant either player's HP hits 0 — HP is tracked here in real
+ * time but, per "solo focus", is never shown during the race; it (and the
  * winner) are only revealed on the results screen.
  *
  * Both players race the *same* infinite word list from independent streams
@@ -41,9 +44,6 @@ type EventMap = {
 }
 
 type Listener<T> = (payload: T) => void
-
-/** Safety net so a perfectly balanced match can't run forever (ms). */
-const MAX_MATCH_MS = 120_000
 
 function newPlayer(id: PlayerId, name: string): PlayerState {
   return { id, name, hp: MAX_HP, score: 0, combo: 0 }
@@ -185,14 +185,13 @@ export class GameStore {
     this.setPhase('racing')
   }
 
-  /** Advance the elapsed clock (called by the driver's frame loop). */
+  /**
+   * Advance the elapsed clock (called by the driver's frame loop). There is no
+   * time cap — the damage ramp ({@link damageRamp}) guarantees the match ends.
+   */
   tick(): void {
     if (this.state.phase !== 'racing') return
     this.state.elapsedMs = nowMs() - this.startedAt
-    if (this.state.elapsedMs >= MAX_MATCH_MS) {
-      this.endMatch(this.state.players.me.hp >= this.state.players.opponent.hp ? 'me' : 'opponent')
-      return
-    }
     this.emit('change', this.state)
   }
 
@@ -221,9 +220,15 @@ export class GameStore {
       player.combo += 1
       pts = points(result.accuracy, result.timeMs, player.combo)
       player.score += pts
-      dmg = damage(word.difficulty, result.accuracy)
-      // Practice has no opponent and no HP — score and learn, nothing to lose.
-      if (!practice) this.applyTug(result.player, dmg, word)
+      const base = damage(word.difficulty, result.accuracy)
+      if (practice) {
+        // Practice has no opponent and no HP — show the raw hit, nothing to lose.
+        dmg = base
+      } else {
+        // Scale the base hit by the time-based ramp so the race always converges.
+        dmg = Math.round(base * damageRamp(this.state.elapsedMs))
+        this.applyTug(result.player, dmg, word)
+      }
 
       if (isMe) {
         this.state.cleared += 1

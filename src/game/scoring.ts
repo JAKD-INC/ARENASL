@@ -17,12 +17,30 @@ const SLOW_MS = 6000
 
 /**
  * Damage a landed sign deals = word complexity scaled by how clean it was.
- * difficulty 1..5 → base 6..30, then multiplied by accuracy.
+ * difficulty 1..5 → base 6..30, then multiplied by accuracy. This is the
+ * *base* hit; {@link damageRamp} scales it up as the match goes on.
  */
 export function damage(difficulty: number, accuracy: number): number {
   if (accuracy < ACCEPT_THRESHOLD) return 0
   const base = difficulty * 6
   return Math.round(base * accuracy)
+}
+
+/** Tug damage doubles every this many ms — the escalation clock. */
+export const RAMP_INTERVAL_MS = 30_000
+/** How much damage multiplies each interval (2 = doubles). */
+const RAMP_FACTOR = 2
+
+/**
+ * Time-based damage multiplier so every match terminates deterministically
+ * (no fixed time cap): hits grow exponentially, `RAMP_FACTOR ^ (elapsed /
+ * RAMP_INTERVAL_MS)`. 1× at the start, 2× by 30s, 4× by 60s, 8× by 90s… Once
+ * the multiplier pushes a single landed sign past the opponent's remaining HP
+ * it's a knockout, so HP is guaranteed to reach 0. Continuous (not stepwise)
+ * so there are no sudden difficulty cliffs.
+ */
+export function damageRamp(elapsedMs: number): number {
+  return RAMP_FACTOR ** (Math.max(0, elapsedMs) / RAMP_INTERVAL_MS)
 }
 
 /** Speed component, 0..1: full at FAST_MS, linearly fades to 0 by SLOW_MS. */
