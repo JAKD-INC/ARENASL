@@ -81,7 +81,7 @@ export function drawLandmarks(
     for (const p of pts) dot(p, 3, color)
   }
 
-  if (msg.pose) for (const p of msg.pose) dot(p, 3, 'rgba(0,255,128,0.7)')
+  // Hands only — pose is still detected for normalization, just not drawn.
   if (msg.handLeft) skeleton(msg.handLeft, '#6cf')
   if (msg.handRight) skeleton(msg.handRight, '#f6c')
 }

@@ -28,15 +28,21 @@ function preload(glosses: string[]): void {
 const bar = (v: number) => '█'.repeat(Math.round(v * 10)) + '░'.repeat(10 - Math.round(v * 10))
 const yn = (v: unknown) => (v ? '✓' : '✗')
 
-function renderDebug(state: GameState | null, msg: LandmarkMessage | null, fps: number): void {
+function renderDebug(
+  state: GameState | null,
+  msg: LandmarkMessage | null,
+  fps: number,
+  rx: number,
+): void {
   const s = state
+  const str = s?.strength ?? 0
   debug.textContent = [
     `target  : ${s?.current ?? '—'}`,
-    `strength: ${(s?.strength ?? 0).toFixed(2)} ${bar(s?.strength ?? 0)}`,
+    `strength: ${str.toFixed(4)} ${bar(str)}`,
     `score   : ${s?.score ?? 0}`,
     `event   : ${s?.event ?? '—'}`,
-    `hands   : L${yn(msg?.handLeft)} R${yn(msg?.handRight)}   pose ${yn(msg?.pose)}`,
-    `fps     : ${fps.toFixed(0)}`,
+    `hands   : L${yn(msg?.handLeft)} R${yn(msg?.handRight)}`,
+    `rx/fps  : ${rx} / ${fps.toFixed(0)}`,
   ].join('\n')
 }
 
@@ -64,9 +70,11 @@ async function main(): Promise<void> {
   })
 
   let latest: GameState | null = null
+  let rx = 0 // count of state messages from the server (0 = server dropping frames)
   const conn = createConnection({
     onState: (s) => {
       latest = s
+      rx++
       render(s)
       preload(s.queue) // queue = upcoming signs; fetch their clips ahead of time
     },
@@ -110,7 +118,7 @@ async function main(): Promise<void> {
       drawLandmarks(clipLandmarks, clip, expected, { fit: 'fill', mirror: false })
     }
 
-    renderDebug(latest, msg, fps)
+    renderDebug(latest, msg, fps, rx)
     requestAnimationFrame(loop)
   }
   requestAnimationFrame(loop)
