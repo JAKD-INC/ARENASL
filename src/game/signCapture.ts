@@ -135,7 +135,10 @@ export class SignCapture {
         break
       }
       case 'verdict': {
-        if (now - this.verdictStartMs >= VERDICT_MS) this.enterWaiting()
+        if (now - this.verdictStartMs < VERDICT_MS) break
+        // Hands still up → straight into the next hold (skip the prompt flash).
+        if (signing) this.beginHold(now)
+        else this.enterWaiting()
         break
       }
     }

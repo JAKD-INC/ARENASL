@@ -489,6 +489,10 @@ body {
   text-align: center;
   margin-bottom: 4px;
 }
+/* lighten on the dark screen gradient (shared .card-sub ink is for white cards) */
+.mode-head .card-sub {
+  color: rgba(255, 255, 255, 0.82);
+}
 .mode-cards {
   width: min(420px, calc(100vw - 40px));
   display: flex;
@@ -905,7 +909,8 @@ body {
   border-radius: 999px;
 }
 .cap-verdict.show {
-  animation: verdict-pop 0.7s var(--spring);
+  /* `forwards` holds the faded-out frame so it doesn't flash back before hide */
+  animation: verdict-pop 0.7s var(--spring) forwards;
 }
 
 @keyframes verdict-pop {
