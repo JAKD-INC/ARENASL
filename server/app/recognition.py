@@ -11,7 +11,9 @@ The Session's DTW work is CPU-bound; callers offload `push_*` to a thread pool
 
 from __future__ import annotations
 
+import inspect
 import logging
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -26,16 +28,45 @@ from asl.session import Session
 
 logger = logging.getLogger("arenasl.recognition")
 
+# The shared matcher is either the DTW `Matcher` (default) or the advanced
+# `EmbeddingMatcher` (opt-in via asl_matcher_mode=="embedding"); both expose the
+# same (window, target) -> strength interface, so everything downstream is typed
+# against `Matcher` for back-compat.
 _matcher: Matcher | None = None
 _glosses: tuple[str, ...] = ()
 
 
 def init_matcher(templates_dir: str | None = None, scale: float | None = None) -> tuple[str, ...]:
     """Load templates and build the shared matcher. Returns the gloss set.
+
+    By default (asl_matcher_mode=="dtw") builds the DTW `Matcher` from the WLASL
+    templates exactly as before. When asl_matcher_mode=="embedding" AND both the
+    encoder and prototypes files exist, builds the learned `EmbeddingMatcher`
+    instead (its glosses come from the prototypes file, not the templates dir).
     Raises (FileNotFoundError/ValueError) if templates are missing — callers
     decide whether that's fatal."""
     global _matcher, _glosses
     s = get_settings()
+
+    if getattr(s, "asl_matcher_mode", "dtw") == "embedding":
+        encoder_path = getattr(s, "asl_encoder_path", "")
+        prototypes_path = getattr(s, "asl_prototypes_path", "")
+        if encoder_path and prototypes_path and os.path.exists(encoder_path) and os.path.exists(prototypes_path):
+            # Imported lazily so the default DTW path never requires onnxruntime
+            # (nor the embedding_matcher module being present).
+            from asl.embedding_matcher import EmbeddingMatcher
+
+            _matcher = EmbeddingMatcher.from_files(encoder_path, prototypes_path)
+            _glosses = tuple(sorted(_matcher._protos))
+            logger.info("ASL embedding matcher loaded: %d glosses", len(_glosses))
+            return _glosses
+        logger.warning(
+            "asl_matcher_mode=embedding but encoder/prototypes missing "
+            "(%r / %r); falling back to DTW matcher",
+            encoder_path,
+            prototypes_path,
+        )
+
     templates = load_templates(templates_dir or s.asl_templates_dir)
     _matcher = Matcher(templates, scale=scale if scale is not None else s.asl_scale)
     _glosses = tuple(sorted(templates))
@@ -88,14 +119,38 @@ class RecognitionSession:
         s = get_settings()
         self._seed = seed
         self._index = 0
-        self._session = Session(
-            matcher or get_matcher(),
-            words.word_iter(seed),
+        # "full" (default) feeds the full 147-dim frame; "hands" reduces the row
+        # to the 84-dim hand-xy match features (see asl.schema.match_features).
+        self._feature_mode = getattr(s, "asl_feature_mode", "full")
+
+        kwargs = dict(
             get_threshold=s.asl_get_threshold,
             confirm_drop=s.asl_confirm_drop,
             miss_budget=s.asl_miss_budget,
             window_size=s.asl_window_size,
             overtake_frames=s.asl_overtake_frames,
+        )
+        # The advanced Session adds confirm_hold/warmup_frames/rank_every. The
+        # fallbacks here equal the behavior-preserving config defaults
+        # (confirm_hold effectively DISABLED via a large sentinel, warmup OFF,
+        # ranking OFF), so today's dip/overtake/miss behavior is identical
+        # whether or not config.py has been ported. They are passed only when
+        # the installed Session accepts them, so this wiring is a no-op against
+        # the older signature too.
+        advanced = {
+            "confirm_hold": getattr(s, "asl_confirm_hold", 100000),
+            "warmup_frames": getattr(s, "asl_warmup_frames", 0),
+            "rank_every": getattr(s, "asl_rank_every", None),
+        }
+        accepted = inspect.signature(Session.__init__).parameters
+        for name, value in advanced.items():
+            if name in accepted:
+                kwargs[name] = value
+
+        self._session = Session(
+            matcher or get_matcher(),
+            words.word_iter(seed),
+            **kwargs,
         )
 
     @property
@@ -116,10 +171,20 @@ class RecognitionSession:
 
     def push_landmarks(self, pose, hand_left, hand_right, t: float) -> Outcome | None:
         """Assemble + normalize a MediaPipe landmark frame, then push it. Returns
-        None for unusable frames (no pose / degenerate shoulders)."""
+        None for unusable frames (no pose / degenerate shoulders).
+
+        In the default "full" feature mode the row is the full 147-dim frame. In
+        "hands" mode it is reduced to the 84-dim hand-xy match features (matching
+        what the offline-built embedding prototypes are scored against)."""
         try:
             frame = assemble_frame(pose, hand_left, hand_right)
             row = normalize_frame(frame).flatten()
+            if self._feature_mode == "hands":
+                # Imported lazily so the default 147-dim path never depends on
+                # match_features being present in asl.schema.
+                from asl.schema import match_features
+
+                row = match_features(row)
         except (ValueError, TypeError):
             return None
         return self.push_frame(row, t)

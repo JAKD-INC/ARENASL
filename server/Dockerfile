@@ -18,15 +18,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Compile dtaidistance's fast C DTW FIRST, independent of our source, so it stays
 # cached across code changes. Assert it loaded (fail the build, not ship slow).
-RUN pip install setuptools wheel Cython "numpy>=1.26" \
+# Install onnxruntime here too (server-side EmbeddingMatcher inference); keeping it
+# in this pre-source layer means it stays cached across code changes.
+RUN pip install setuptools wheel Cython "numpy>=1.26" "onnxruntime>=1.18" \
  && pip install --no-deps --no-build-isolation --no-binary dtaidistance "dtaidistance>=2.4" \
- && python -c "import numpy as np; from dtaidistance import dtw_ndim; dtw_ndim.distance_fast(np.zeros((2,1)), np.zeros((2,1))); print('dtaidistance C extension OK')"
+ && python -c "import numpy as np; from dtaidistance import dtw_ndim; dtw_ndim.distance_fast(np.zeros((2,1)), np.zeros((2,1))); print('dtaidistance C extension OK')" \
+ && python -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__, 'OK')"
 
 # Project deps + editable install. Code changes only re-run from here; the C
 # layer above stays cached, so iteration is fast.
 COPY server/pyproject.toml /app/pyproject.toml
 COPY server/app /app/app
 COPY server/asl /app/asl
+COPY server/train /app/train
+COPY server/build /app/build
 COPY server/tests /app/tests
 RUN pip install -e ".[dev]"
 

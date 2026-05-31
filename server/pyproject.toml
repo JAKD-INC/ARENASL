@@ -19,6 +19,7 @@ dependencies = [
     "python-multipart>=0.0.9",   # OAuth2PasswordRequestForm needs form parsing
     "numpy>=1.26",               # ASL landmark arrays + DTW (vendored asl/)
     "dtaidistance>=2.4",         # C-accelerated DTW for sign matching
+    "onnxruntime>=1.18",         # server-side inference for the learned EmbeddingMatcher
 ]
 
 [project.optional-dependencies]
@@ -27,6 +28,10 @@ dev = [
     "pytest-timeout>=2.3",       # backstop so a stuck socket can't hang the suite
     "httpx>=0.27",               # FastAPI TestClient
 ]
+train = [
+    "torch>=2.2",                # offline training; CPU is fine (GPU: matching CUDA wheel)
+    "onnx>=1.16",                # export the trained encoder to encoder.onnx
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -34,4 +39,4 @@ pythonpath = ["."]
 addopts = "--timeout=30"
 
 [tool.setuptools.packages.find]
-include = ["app*", "asl*"]
+include = ["app*", "asl*", "train*", "build*"]

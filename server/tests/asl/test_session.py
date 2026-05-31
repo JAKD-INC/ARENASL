@@ -57,6 +57,8 @@ def _session(prompts, strengths, **kwargs):
     defaults = dict(
         get_threshold=0.9, confirm_drop=0.8, miss_budget=2.0,
         window_size=8, get_points=20, miss_points=-10, lookahead=2,
+        warmup_frames=0,  # disable warmup gating for the scripted segmentation
+                          # tests; the warmup behavior is covered explicitly below
     )
     defaults.update(kwargs)
     return Session(StubMatcher(strengths), itertools.cycle(prompts), **defaults)
@@ -66,6 +68,8 @@ def _session_with(matcher, prompts, **kwargs):
     defaults = dict(
         get_threshold=0.9, confirm_drop=0.8, miss_budget=2.0,
         window_size=8, get_points=20, miss_points=-10, lookahead=2,
+        warmup_frames=0,  # disable warmup gating for the scripted segmentation
+                          # tests; the warmup behavior is covered explicitly below
     )
     defaults.update(kwargs)
     return Session(matcher, itertools.cycle(prompts), **defaults)
@@ -227,3 +231,87 @@ def test_high_plateau_no_overtake_no_dip_waits_for_miss_budget():
     assert st.confirmed is None
     assert st.current == "B"
     assert st.score == -10
+
+
+def test_held_sign_confirms_without_dip_or_overtake():
+    # Strength holds above threshold with no dip and no overtake; after
+    # confirm_hold consecutive frames the held sign is accepted.
+    s = _session(["A", "B", "C"], [0.7, 0.7, 0.7, 0.7],
+                 get_threshold=0.5, confirm_hold=3)
+    assert s.push(_FRAME, t=0.0).event is None   # hold 1
+    assert s.push(_FRAME, t=0.1).event is None   # hold 2
+    st = s.push(_FRAME, t=0.2)                    # hold 3 -> confirm
+    assert st.event == "get"
+    assert st.confirmed == "A"
+    assert st.current == "B"
+    assert st.score == 20
+
+
+def test_warmup_blocks_cascading_confirm_after_advance():
+    # Right after a get the sliding window still holds the tail of the previous
+    # sign, so a strong frame on the new target could spuriously confirm and
+    # cascade passes. With warmup_frames=3, the new target must see 3 fresh
+    # frames before ANY confirm path can fire; until then strong frames are
+    # held, and only once warmed up does the confirm land.
+    #
+    # Frame-by-frame (warmup_frames=3, get_threshold=0.9, confirm_drop=0.8):
+    #   A: peak then dip, but gated until 3 frames have flowed in
+    #   B: immediately strong (peak+dip), blocked until ITS warmup elapses
+    s = _session(
+        ["A", "B", "C"],
+        [0.95, 0.95, 0.95, 0.7,   # A: peak held, confirm-dip arrives on frame 4
+         0.95, 0.7, 0.95, 0.7],   # B: strong peak+dip every pair, but warmed-up
+        miss_budget=None, warmup_frames=3,
+    )
+    # --- sign A: confirm is gated for the first 3 frames ---
+    assert s.push(_FRAME, t=0.0).event is None   # frame 1: peak 0.95, gated
+    assert s.push(_FRAME, t=0.1).event is None   # frame 2: still gated
+    assert s.push(_FRAME, t=0.2).event is None   # frame 3: warmed up, but no dip
+    stA = s.push(_FRAME, t=0.3)                   # frame 4: 0.7 dip -> get A
+    assert stA.event == "get"
+    assert stA.confirmed == "A"
+    assert stA.current == "B"
+
+    # --- right after the get: a STRONG next frame must NOT confirm yet ---
+    # frames_since_advance reset to 0; warmup must elapse again before B confirms.
+    assert s.push(_FRAME, t=0.4).event is None   # B frame 1: peak 0.95, gated
+    assert s.push(_FRAME, t=0.5).event is None   # B frame 2: 0.7 dip, still gated
+    assert s.push(_FRAME, t=0.6).event is None   # B frame 3: peak 0.95, warmed up,
+                                                 #            but no dip this frame
+    stB = s.push(_FRAME, t=0.7)                   # B frame 4: 0.7 dip -> get B
+    assert stB.event == "get"
+    assert stB.confirmed == "B"
+    assert stB.current == "C"
+    assert stB.score == 40
+
+
+def test_no_auto_miss_when_budget_is_none():
+    # miss_budget=None disables the timer entirely: however long the player
+    # lingers on a weak sign, it never auto-misses and never advances.
+    s = _session(["A", "B"], [0.1, 0.1, 0.1], miss_budget=None)
+    s.push(_FRAME, t=0.0)
+    s.push(_FRAME, t=1000.0)
+    st = s.push(_FRAME, t=1_000_000.0)
+    assert st.event is None
+    assert st.score == 0
+    assert st.current == "A"   # still on the first prompt; no advance
+
+
+class _RankStub:
+    def strength(self, window, target):
+        return 0.0
+
+    def rank(self, window, k=3):
+        return [{"gloss": "X", "distance": 0.1}]
+
+
+def test_rank_every_populates_topk():
+    # When rank_every is set and the matcher exposes rank(), State.topk fills in
+    # every rank_every frames (and stays None before the first sample).
+    s = Session(
+        _RankStub(), itertools.cycle(["A", "B", "C"]),
+        get_threshold=0.9, confirm_drop=0.8, miss_budget=None,
+        window_size=8, lookahead=2, warmup_frames=0, rank_every=2,
+    )
+    assert s.push(_FRAME, t=0.0).topk is None             # frame 1: not yet
+    assert s.push(_FRAME, t=0.1).topk == [{"gloss": "X", "distance": 0.1}]  # frame 2

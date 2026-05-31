@@ -22,8 +22,17 @@ class Matcher:
         self._templates = templates
         self._scale = scale
 
+    def best_distance(self, window: np.ndarray, target: str) -> float:
+        """Smallest DTW distance from `window` to any exemplar of `target`."""
+        exemplars = self._templates[target]  # KeyError if unknown target
+        return min(dtw_distance(window, t) for t in exemplars)
+
     def strength(self, window: np.ndarray, target: str) -> float:
         """Return match strength in [0, 1] of `window` against `target`."""
-        exemplars = self._templates[target]  # KeyError if unknown target
-        best = min(dtw_distance(window, t) for t in exemplars)
-        return math.exp(-best / self._scale)
+        return math.exp(-self.best_distance(window, target) / self._scale)
+
+    def rank(self, window: np.ndarray, k: int = 3) -> list[dict]:
+        """Debug: the k closest glosses to `window` by best DTW distance.
+        Reveals whether the sign being performed is actually the nearest match."""
+        scored = sorted((self.best_distance(window, g), g) for g in self._templates)
+        return [{"gloss": g, "distance": round(d, 3)} for d, g in scored[:k]]

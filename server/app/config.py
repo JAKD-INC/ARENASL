@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     asl_overtake_frames: int = 2    # consecutive next-target wins to confirm
     recognition_fps_cap: int = 15   # server-side per-player frame budget (phase 2e)
 
+    # --- ASL recognition (ADVANCED recognizer; OPT-IN, defaults reproduce today) ---
+    asl_matcher_mode: str = "dtw"          # "dtw" (default) or "embedding"
+    asl_feature_mode: str = "full"         # "full" (default) or "hands"
+    asl_encoder_path: str = "./data/encoder.onnx"
+    asl_prototypes_path: str = "./data/prototypes.npz"
+    asl_warmup_frames: int = 0             # advanced cascade-guard OFF by default
+    asl_confirm_hold: int = 100000         # effectively DISABLED (today's behavior)
+    asl_rank_every: int = 0                # 0/None => server-side ranking OFF
+
     # --- replay ---
     replay_dir: str = "./replays"
     replay_retention_days: int = 14
