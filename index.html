@@ -4,25 +4,29 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <title>ARENASL</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <video id="feed" autoplay muted playsinline></video>
-    <canvas id="landmarks"></canvas>
-    <pre id="debug"></pre>
+    <canvas id="filter"></canvas>
+    <canvas id="lens"></canvas>
+    <canvas id="vfx"></canvas>
+    <div id="capture"></div>
+    <div id="hud"></div>
+    <div id="screens"></div>
+    <div id="practicebar"></div>
+    <div id="coach"></div>
+    <div id="results"></div>
     <div id="message" class="message hidden" role="alert"></div>
-    <div id="overlay">
-      <div id="prompts"></div>
-      <div id="clip-box">
-        <video id="clip" autoplay loop muted playsinline></video>
-        <canvas id="clip-landmarks"></canvas>
-      </div>
-      <div id="rope"><div id="rope-marker"></div></div>
-      <div id="score">0</div>
-    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
