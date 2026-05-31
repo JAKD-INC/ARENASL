@@ -239,3 +239,41 @@ def save_prototypes(path, protos):
         matrix = np.zeros((0, 0), dtype=np.float32)
     np.savez(path, glosses=np.array(glosses), protos=matrix.astype(np.float32))
     return path
+
+
+if __name__ == "__main__":
+    # Enroll prototypes from a landmark cache + a trained encoder:
+    #   python -m train.enroll --cache data/cache.npz --onnx data/encoder.onnx \
+    #       --out data/prototypes.npz
+    # Uses the SAME cache as training (sequences are already (T,84) hand-xy), so no
+    # re-extraction. Set asl_matcher_mode=embedding + asl_prototypes_path to use it.
+    import argparse
+    from collections import defaultdict
+
+    import onnxruntime as ort
+
+    from train.train import _load_cache
+
+    p = argparse.ArgumentParser(description="Enroll prototypes from cache + encoder.")
+    p.add_argument("--cache", required=True, help=".npz from `python -m train.dataset`")
+    p.add_argument("--onnx", default="data/encoder.onnx")
+    p.add_argument("--out", default="data/prototypes.npz")
+    p.add_argument("--k", type=int, default=3)
+    p.add_argument("--window", type=int, default=WINDOW_SIZE)
+    a = p.parse_args()
+
+    sess = ort.InferenceSession(a.onnx, providers=["CPUExecutionProvider"])
+    iname = sess.get_inputs()[0].name
+
+    def _encode(w):
+        w = np.asarray(w, dtype=np.float32)
+        if w.ndim == 2:
+            w = w[None, ...]  # (1, T, 84)
+        return np.asarray(sess.run(None, {iname: w})[0], dtype=np.float32).reshape(-1)
+
+    refs = defaultdict(list)
+    for s in _load_cache(a.cache):
+        refs[s["gloss"]].append(s["seq"])
+    protos = enroll(_encode, dict(refs), k=a.k, window=a.window)
+    save_prototypes(a.out, protos)
+    print(f"enrolled {len(protos)} glosses -> {a.out}")

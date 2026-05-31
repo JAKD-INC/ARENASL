@@ -1,0 +1,41 @@
+# GPU training image for the motion-embedding recognizer (NOT the server image).
+# Builds the WLASL landmark cache (MediaPipe -> needs GL/EGL libs), trains the
+# encoder on the GPU, and enrolls prototypes. Run with `--gpus all`
+# (requires nvidia-container-toolkit on the host; WSL2 + RTX works once that's set up).
+#
+#   docker build -f server/Dockerfile.train -t arenasl-train .
+#   docker run --rm --gpus all -v "$PWD/data:/work/data" -v "$PWD/public:/work/public" \
+#       arenasl-train python -m train.dataset --glosses book drink help eat --out data/cache.npz
+#   docker run --rm --gpus all -v "$PWD/data:/work/data" arenasl-train \
+#       python -m train.train --cache data/cache.npz --onnx data/encoder.onnx
+#   docker run --rm --gpus all -v "$PWD/data:/work/data" arenasl-train \
+#       python -m train.enroll --cache data/cache.npz --onnx data/encoder.onnx --out data/prototypes.npz
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PYTHONPATH=/work
+WORKDIR /work
+
+# python + MediaPipe's GL/EGL system libs (libGLESv2.so.2 / libEGL.so.1) + OpenCV/glib.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-pip \
+      libgles2 libegl1 libgl1 libglib2.0-0 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# CUDA torch (cu121 wheels run on Ampere e.g. RTX 3060) + the rest.
+RUN pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu121 \
+ && pip3 install --no-cache-dir numpy "dtaidistance>=2.4" onnx onnxruntime \
+      mediapipe opencv-python-headless huggingface_hub
+
+# extract.py looks for the MediaPipe .task models at <repo>/public/models; bake them in
+# (or mount public/ at runtime). parents[2] of /work/build/extract.py is /work.
+RUN mkdir -p /work/public/models \
+ && (command -v curl >/dev/null || (apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*)) \
+ && curl -fL -o /work/public/models/hand_landmarker.task \
+      https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task \
+ && curl -fL -o /work/public/models/pose_landmarker_lite.task \
+      https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task
+
+COPY server/asl /work/asl
+COPY server/train /work/train
+COPY server/build /work/build
+CMD ["bash"]

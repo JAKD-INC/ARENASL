@@ -146,14 +146,20 @@ def main():
     p.add_argument("--emb-dim", type=int, default=128)
     p.add_argument("--val-frac", type=float, default=0.2)
     p.add_argument("--onnx", default="data/encoder.onnx")
+    p.add_argument("--device", default=None,
+                   help="cuda|cpu (default: cuda when available)")
     a = p.parse_args()
+
+    import torch
+    device = a.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"training on device={device}")
 
     samples = _load_cache(a.cache)
     train_s, val_s = signer_split(samples, a.val_frac)
     train_ds = SequenceDataset(train_s, train=True, window=a.window)
     val_ds = SequenceDataset(val_s, train=False, window=a.window)
     model = MotionEncoder(emb_dim=a.emb_dim, num_classes=train_ds.num_classes)
-    model, metrics = train(model, train_ds, val_ds, epochs=a.epochs)
+    model, metrics = train(model, train_ds, val_ds, epochs=a.epochs, device=device)
     print(f"val top1={metrics['top1']:.3f} top5={metrics['top5']:.3f}")
     export_onnx(model, a.onnx)
     print(f"exported encoder -> {a.onnx}")
