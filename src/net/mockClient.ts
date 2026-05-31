@@ -131,11 +131,13 @@ export class MockNetClient implements NetClient {
     if (lobby.state !== 'full' || !lobby.members.every((m) => m.ready)) return
     this.starting = true
     const matchId = `mock-${this.code()}`
+    const wordSeed = Math.floor(Math.random() * 1e9)
     this.after(500, () => {
       this.emit({ type: 'matchFound', matchId, role: 'offerer', opponent: RIVAL })
-      this.after(650, () =>
-        this.emit({ type: 'warmupStart', wordSeed: Math.floor(Math.random() * 1e9), datasetVersion: 'mock' }),
-      )
+      this.after(650, () => {
+        this.emit({ type: 'warmupStart', wordSeed, datasetVersion: 'mock' })
+        this.after(1600, () => this.emit({ type: 'matchStart', matchId, wordSeed, recordStartMs: 0 }))
+      })
     })
   }
 

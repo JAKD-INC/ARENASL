@@ -298,6 +298,52 @@ export class GameStore {
     this.setPhase('finished')
     this.emit('finished', undefined)
   }
+
+  // --- online (server-authoritative) -----------------------------------------
+  // In a networked duel the server owns recognition, HP, and the word sequence.
+  // These setters make the store a view of that state (the local damage/death
+  // path in submitSign is not used online).
+
+  /** The word the server wants the local player to sign now. */
+  setNetWord(index: number, text: string, difficulty = 1): void {
+    if (this.state.currentWord.id === String(index) && this.state.currentWord.text === text) return
+    this.state.currentWord = { id: String(index), text, difficulty }
+    this.state.cleared = Math.max(this.state.cleared, index)
+    this.emit('change', this.state)
+  }
+
+  /** Server-authoritative HP for both players (revealed on the results screen). */
+  setNetHp(meHp: number, oppHp: number): void {
+    this.state.players.me.hp = meHp
+    this.state.players.opponent.hp = oppHp
+    this.emit('change', this.state)
+  }
+
+  /** The server confirmed a sign — local feedback (combo/score/VFX). */
+  netConfirm(strength: number): SignOutcome {
+    const me = this.state.players.me
+    me.combo += 1
+    const accuracy = Math.max(0.6, Math.min(0.99, strength || 0.85))
+    const pts = points(accuracy, 1500, me.combo)
+    me.score += pts
+    this.state.cleared += 1
+    const outcome: SignOutcome = {
+      result: { player: 'me', wordId: this.state.currentWord.id, accuracy, timeMs: 0 },
+      word: this.state.currentWord,
+      accepted: true,
+      damage: 0,
+      points: pts,
+      combo: me.combo,
+    }
+    this.emit('sign', outcome)
+    this.emit('change', this.state)
+    return outcome
+  }
+
+  /** The server ended the match. */
+  netFinish(winner: PlayerId): void {
+    this.endMatch(winner)
+  }
 }
 
 function delay(ms: number): Promise<void> {

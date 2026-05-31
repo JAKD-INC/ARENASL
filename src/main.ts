@@ -14,6 +14,7 @@ import { createColorFilterRenderer } from './ui/filters/colorFilter.ts'
 import { LensRenderer } from './ui/lenses/lensRenderer.ts'
 import { LookController } from './ui/looks/controller.ts'
 import { Router } from './app/router.ts'
+import { NetMatchDriver } from './game/netMatch.ts'
 import { createNetClient } from './net/wsClient.ts'
 import { MockNetClient } from './net/mockClient.ts'
 import { ensureAuth } from './net/auth.ts'
@@ -93,6 +94,8 @@ async function main(): Promise<void> {
   captureRoot.classList.add('hidden')
 
   const driver = new MockDriver(store)
+  let netDriver: NetMatchDriver | null = null
+  const dbg = makeNetDebug()
   let net = createNetClient()
   const router = new Router(screensRoot)
   const coach = new CoachOverlay(coachRoot)
@@ -137,21 +140,31 @@ async function main(): Promise<void> {
     net.joinQueue()
     router.show(new FindRivalScreen(net, { onPaired: goLobby, onCancel: () => { net.leaveQueue(); goMode() } }))
   }
-  function goWarmup(seed: number, opp: OpponentView): void {
+  function goWarmup(opp: OpponentView): void {
+    // VS splash; the actual match begins on the server's `matchStart` event.
     router.show(
       new WarmupScreen(
         { name: opp.displayName, elo: opp.elo },
         { name: displayName || 'You', elo: net.elo ?? undefined },
-        { onDone: () => void startNetMatch(seed, opp) },
+        { onDone: () => {} },
       ),
     )
   }
   async function startNetMatch(seed: number, opp: OpponentView): Promise<void> {
     router.show(null)
     await sound.resume()
+    const online = !(net instanceof MockNetClient)
     store.beginMatch(seed, opp.displayName)
-    await store.runCountdown(3)
-    driver.start()
+    await store.runCountdown(online ? 1 : 3)
+    if (online) {
+      // Server owns recognition/HP/words: pause the local heuristic, stream up.
+      capture.pause()
+      netDriver = new NetMatchDriver(store, net, landmarks, captureUI, dbg)
+      netDriver.start(net.playerId ?? -1)
+    } else {
+      capture.resume()
+      driver.start()
+    }
   }
   async function enterPractice(): Promise<void> {
     router.show(null)
@@ -170,14 +183,17 @@ async function main(): Promise<void> {
   // --- match start handshake (mock or real, same events) ---
   // Re-attachable because `net` can fall back to the mock client if the backend
   // is unreachable at boot.
+  const DEFAULT_OPP: OpponentView = { playerId: 2, displayName: 'Rival', elo: 1000 }
   let pendingOpponent: OpponentView | null = null
   let unsubMatch: (() => void) | null = null
   function subscribeMatchEvents(): void {
     unsubMatch?.()
     unsubMatch = net.on((e) => {
-      if (e.type === 'matchFound') pendingOpponent = e.opponent
-      else if (e.type === 'warmupStart') {
-        goWarmup(e.wordSeed, pendingOpponent ?? { playerId: 2, displayName: 'Rival', elo: 1000 })
+      if (e.type === 'matchFound') {
+        pendingOpponent = e.opponent
+        goWarmup(e.opponent) // VS splash; begins on matchStart
+      } else if (e.type === 'matchStart') {
+        void startNetMatch(e.wordSeed, pendingOpponent ?? DEFAULT_OPP)
       }
     })
   }
@@ -220,6 +236,9 @@ async function main(): Promise<void> {
   })
   store.on('finished', () => {
     driver.stop()
+    netDriver?.stop()
+    netDriver = null
+    capture.resume() // back to local capture for practice/offline
     sound.stopHold()
     sound.stopMusic()
     store.getState().winner === 'me' ? sound.win() : sound.lose()
@@ -242,6 +261,17 @@ async function main(): Promise<void> {
   } else {
     await connectNet(displayName)
     goTitle()
+  }
+}
+
+/** Opt-in (`?debug=1`) on-screen readout of the live recognition/match state. */
+function makeNetDebug(): ((line: string) => void) | undefined {
+  if (new URLSearchParams(location.search).get('debug') !== '1') return undefined
+  const el = document.createElement('div')
+  el.className = 'net-debug'
+  document.body.append(el)
+  return (line: string) => {
+    el.textContent = line
   }
 }
 

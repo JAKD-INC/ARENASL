@@ -963,6 +963,22 @@ body {
   transform: scale(0.9);
 }
 
+/* opt-in live recognition/match debug readout (?debug=1) */
+.net-debug {
+  position: fixed;
+  right: max(10px, env(safe-area-inset-right));
+  bottom: max(64px, env(safe-area-inset-bottom));
+  z-index: var(--z-message);
+  max-width: 72vw;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #5f6;
+  font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
 /* ============================ LOBBY ============================ */
 
 #picker {

@@ -89,6 +89,12 @@ export class CaptureUI implements CaptureCallbacks {
     this.showVerdict(outcome, tier)
   }
 
+  /** Online: drive the ring straight from the server's recognition strength. */
+  online = (strength: number): void => {
+    this.root.dataset.cap = strength > 0.05 ? 'holding' : 'waiting'
+    this.setProgress(Math.max(0, Math.min(1, strength)))
+  }
+
   // --- rendering ------------------------------------------------------------
 
   private setProgress(p: number): void {

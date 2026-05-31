@@ -50,6 +50,7 @@ export class SignCapture {
   private cb: CaptureCallbacks
 
   private state: State = 'waiting'
+  private paused = false
   private rafId = 0
   private raisedStreak = 0
   private droppedStreak = 0
@@ -84,7 +85,17 @@ export class SignCapture {
     this.rafId = 0
   }
 
+  /** Online matches drive the UI from the server, so the local heuristic pauses. */
+  pause(): void {
+    this.paused = true
+    this.state = 'waiting'
+  }
+  resume(): void {
+    this.paused = false
+  }
+
   private tick(): void {
+    if (this.paused) return
     const now = performance.now()
     const s = this.store.getState()
     // The same capture loop powers both a real match and Practice.
