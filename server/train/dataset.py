@@ -308,7 +308,7 @@ def build_cache(glosses, clip_paths, out_path, per_gloss=None, signer_by_video=N
     return samples
 
 
-def build_library_cache(glosses, out_path, per_gloss=8, workers=None):
+def build_library_cache(glosses, out_path, per_gloss=8, workers=None, clips_dir=None):
     """Glue from build.build_library's gloss catalogue to build_cache.
 
     build_library knows how to enumerate WLASL clips (Voxel51/WLASL samples.json:
@@ -317,8 +317,14 @@ def build_library_cache(glosses, out_path, per_gloss=8, workers=None):
     entries (downloading via hf_hub_download, video_id = the filepath stem, which
     is what build_library names templates by AND the key WLASL_v0.3.json joins on)
     and hands them to build_cache. NOT run in unit tests (network + MediaPipe).
+
+    When `clips_dir` is set, the FIRST usable downloaded clip per gloss is also
+    copied there as `<gloss>.mp4` (the lowercase single-token gloss == the HUD
+    slug) so be-server can serve a reference example clip for that gloss. With
+    `clips_dir=None` (the default) nothing is copied — the cache build is unchanged.
     """
     import json
+    import shutil
     from collections import defaultdict
     from pathlib import Path
     from huggingface_hub import hf_hub_download
@@ -334,6 +340,9 @@ def build_library_cache(glosses, out_path, per_gloss=8, workers=None):
     if glosses is None:
         glosses = sorted(by_gloss)
 
+    if clips_dir is not None:
+        Path(clips_dir).mkdir(parents=True, exist_ok=True)
+
     clip_paths: dict = {}
     for gloss in glosses:
         entries = []
@@ -345,6 +354,14 @@ def build_library_cache(glosses, out_path, per_gloss=8, workers=None):
                 continue
             entries.append((Path(fp).stem, clip))
         clip_paths[gloss] = entries
+        # Copy the first usable downloaded clip as the gloss's reference example so
+        # be-server can serve GET /clips/<gloss>.mp4 (the HUD's example video).
+        if clips_dir is not None and entries:
+            dest = Path(clips_dir) / f"{gloss.lower()}.mp4"
+            try:
+                shutil.copy(entries[0][1], dest)
+            except OSError as exc:  # a copy failure must not sink the build
+                print(f"  skip clip copy for {gloss}: {exc}")
 
     return build_cache(glosses, clip_paths, out_path, per_gloss=per_gloss, workers=workers)
 
@@ -360,9 +377,13 @@ if __name__ == "__main__":
     g.add_argument("--all", action="store_true", help="every gloss in the dataset")
     p.add_argument("--out", default="data/cache.npz")
     p.add_argument("--per-gloss", type=int, default=8)
+    p.add_argument("--clips-dir", default="data/clips",
+                   help="copy the first usable clip per gloss here as <gloss>.mp4 "
+                        "(be-server serves these as /clips/<gloss>.mp4); '' to skip")
     import os as _os
     p.add_argument("--workers", type=int, default=min(_os.cpu_count() or 4, 8),
                    help="parallel extraction workers (default min(cpu,8); ~0.5-1GB each)")
     a = p.parse_args()
     build_library_cache(None if a.all else a.glosses, a.out,
-                        per_gloss=a.per_gloss, workers=a.workers)
+                        per_gloss=a.per_gloss, workers=a.workers,
+                        clips_dir=(a.clips_dir or None))

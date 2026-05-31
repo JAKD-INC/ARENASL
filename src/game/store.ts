@@ -111,6 +111,27 @@ export class GameStore {
     this.setPhase('practice')
   }
 
+  /**
+   * Enter **server-driven** Practice: same stakes-free practice phase (no HP, no
+   * win/loss, capture UI mounts) but the word sequence comes from the server
+   * recognizer via {@link setNetWord} instead of a local stream. The
+   * {@link PracticeDriver} streams landmarks up and feeds `recognition.update`
+   * back through {@link setNetWord} + {@link netConfirm}.
+   */
+  startNetPractice(): void {
+    this.practiceStream = null
+    this.state.players.me = newPlayer('me', this.myName)
+    this.state.cleared = 0
+    this.state.elapsedMs = 0
+    this.state.winner = null
+    this.tugHistory.length = 0
+    // Blank placeholder so the HUD doesn't flash a stale match/idle word (and its
+    // clip) before the server sends the first recognition.update; setNetWord()
+    // replaces it the instant the practice recognizer responds.
+    this.state.currentWord = { id: '-1', text: '', difficulty: 0 }
+    this.setPhase('practice')
+  }
+
   /** Leave Practice and return to the idle lobby. */
   endPractice(): void {
     this.practiceStream = null

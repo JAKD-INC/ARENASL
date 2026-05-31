@@ -14,6 +14,7 @@ export default defineConfig({
       '/auth': { target: BACKEND },
       '/signs': { target: BACKEND },
       '/replay': { target: BACKEND },
+      '/clips': { target: BACKEND },
     },
   },
 })

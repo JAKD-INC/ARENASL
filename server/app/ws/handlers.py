@@ -27,6 +27,9 @@ from app.messages import (
     OpponentStatus,
     OpponentView,
     PlayerState,
+    PracticeStart,
+    PracticeStartReq,
+    PracticeStop,
     QueueJoin,
     QueueLeave,
     QueueStatus,
@@ -98,6 +101,10 @@ async def dispatch(pid: int, msg: ClientMessage) -> None:
         await _on_queue_join(pid)
     elif isinstance(msg, QueueLeave):
         await _on_queue_leave(pid)
+    elif isinstance(msg, PracticeStartReq):
+        await _on_practice_start(pid)
+    elif isinstance(msg, PracticeStop):
+        await _on_practice_stop(pid)
     elif isinstance(msg, Signal):
         await _on_signal(pid, msg.data)
     elif isinstance(msg, Landmark):
@@ -226,16 +233,39 @@ async def _on_landmark(pid: int, msg: Landmark) -> None:
     # Warmup: a queued player practices; report strength, deal no damage.
     player = state.players.get(pid)
     if player is not None and player.status == "queued" and player.warmup_session is not None:
-        outcome = await asyncio.to_thread(
-            player.warmup_session.push_landmarks, msg.pose, msg.hand_left, msg.hand_right, msg.t
-        )
-        if outcome is not None:
-            await manager.send(
-                pid,
-                RecognitionUpdate(
-                    word_index=outcome.word_index, word=outcome.word, strength=outcome.strength
-                ),
-            )
+        await _practice_feedback(pid, player.warmup_session, msg)
+        return
+
+    # Practice mode: a SOLO player (not in matchmaking) drills the seeded word
+    # stream. Same strength feedback as warmup, no damage.
+    if player is not None and player.status == "practice" and player.practice_session is not None:
+        await _practice_feedback(pid, player.practice_session, msg)
+
+
+async def _practice_feedback(pid: int, session, msg: Landmark) -> None:
+    """Run a non-scoring recognizer and emit recognition.update on a usable frame.
+    Shared by warmup (queued) and practice (solo)."""
+    outcome = await asyncio.to_thread(
+        session.push_landmarks, msg.pose, msg.hand_left, msg.hand_right, msg.t
+    )
+    if outcome is not None:
+        await manager.send(pid, _recognition_update(outcome))
+
+
+def _recognition_update(outcome) -> RecognitionUpdate:
+    """Build a recognition.update for the current/just-completed word, attaching
+    the word's catalog word_strength as `difficulty` so the client gets the real
+    value (defaults to 1.0 for a word missing from the dataset)."""
+    try:
+        difficulty = get_dataset().word_strength(outcome.word)
+    except (KeyError, RuntimeError):
+        difficulty = 1.0
+    return RecognitionUpdate(
+        word_index=outcome.word_index,
+        word=outcome.word,
+        strength=outcome.strength,
+        difficulty=difficulty,
+    )
 
 
 def _throttled(pid: int, t: float) -> bool:
@@ -271,12 +301,7 @@ async def _recognize_in_match(pid: int, match: Match, session, msg: Landmark) ->
         match_engine.apply_miss(match, pid, outcome.word_index, now)
         await _broadcast_match_state(match)
     else:
-        await manager.send(
-            pid,
-            RecognitionUpdate(
-                word_index=outcome.word_index, word=outcome.word, strength=outcome.strength
-            ),
-        )
+        await manager.send(pid, _recognition_update(outcome))
 
 
 async def _finalize_match(match: Match, reason: str) -> None:
@@ -379,6 +404,41 @@ async def _on_queue_leave(pid: int) -> None:
     if player is not None:
         player.warmup_session = None
     await manager.send(pid, QueueStatus(position=0))
+
+
+# --- practice handlers (SOLO recognizer, no matchmaking) --------------------
+
+
+async def _on_practice_start(pid: int) -> None:
+    """Begin solo practice: mint a SOLO recognizer over a seeded word stream
+    WITHOUT joining matchmaking, set status "practice", ack with PracticeStart."""
+    player = state.players.get(pid)
+    if player is None:
+        return
+    if player.status not in ("idle", "practice"):
+        await manager.send(pid, error("busy", "Leave your current lobby first"))
+        return
+    if not recognition.is_ready():
+        await manager.send(
+            pid, error("recognition_unavailable", "Sign recognition is not available")
+        )
+        return
+
+    seed = warmup.new_seed()
+    player.practice_session = recognition.new_session(seed)
+    player.status = "practice"
+    await manager.send(pid, PracticeStart(word_seed=seed, dataset_version=get_dataset().version))
+
+
+async def _on_practice_stop(pid: int) -> None:
+    """End solo practice: clear the recognizer + status."""
+    player = state.players.get(pid)
+    if player is None:
+        return
+    player.practice_session = None
+    if player.status == "practice":
+        player.status = "idle"
+    _last_frame_t.pop(pid, None)
 
 
 # --- signaling relay --------------------------------------------------------

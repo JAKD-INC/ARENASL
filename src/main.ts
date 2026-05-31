@@ -15,6 +15,7 @@ import { LensRenderer } from './ui/lenses/lensRenderer.ts'
 import { LookController } from './ui/looks/controller.ts'
 import { Router } from './app/router.ts'
 import { NetMatchDriver } from './game/netMatch.ts'
+import { PracticeDriver } from './game/practiceDriver.ts'
 import { createNetClient } from './net/wsClient.ts'
 import { MockNetClient } from './net/mockClient.ts'
 import { ensureAuth } from './net/auth.ts'
@@ -95,6 +96,7 @@ async function main(): Promise<void> {
 
   const driver = new MockDriver(store)
   let netDriver: NetMatchDriver | null = null
+  let practiceDriver: PracticeDriver | null = null
   const dbg = makeNetDebug()
   let net = createNetClient()
   const router = new Router(screensRoot)
@@ -169,10 +171,25 @@ async function main(): Promise<void> {
   async function enterPractice(): Promise<void> {
     router.show(null)
     await sound.resume()
-    store.startPractice()
+    // Practice uses the SERVER recognizer over a dedicated practice stream (NOT
+    // matchmaking). Ensure we're authed + connected first; if the backend is
+    // unreachable we fall back to the mock client, whose practice stub keeps the
+    // same flow alive offline.
+    if (!(net instanceof MockNetClient) && net.playerId == null) {
+      await connectNet(displayName || 'You')
+    }
+    // Server owns recognition + the word/clip sequence: pause the local
+    // heuristic and stream raw landmarks up instead.
+    capture.pause()
+    store.startNetPractice()
+    practiceDriver = new PracticeDriver(store, net, landmarks, captureUI, dbg)
+    practiceDriver.start()
     runCoach() // the tutorial is the practice — always walk through it
   }
   function exitPractice(): void {
+    practiceDriver?.stop() // sends practice.stop + tears down the stream
+    practiceDriver = null
+    capture.resume() // back to the local heuristic for offline/idle
     store.endPractice()
     goTitle()
   }

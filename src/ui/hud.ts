@@ -1,17 +1,17 @@
 import type { GameState, Word } from '../game/types.ts'
 import type { GameStore } from '../game/store.ts'
-import { SIGN_GIFS } from '../game/signAssets.ts'
 
 /**
  * The live, solo-focus HUD: a glassmorphism overlay showing only the local
  * player's match. The current word is taught with a **visual** demo of the sign
- * (a looping gif/image) — players prop their phone up and watch, they don't
- * read — plus your timer, score, and combo. No opponent info and no HP bar;
- * those are revealed on the results screen.
+ * (a looping reference clip) — players prop their phone up and watch, they
+ * don't read — plus your timer, score, and combo. No opponent info and no HP
+ * bar; those are revealed on the results screen.
  *
- * Demo art is loaded from `/signs/<slug>.gif` (e.g. THANK YOU → thank-you.gif).
- * If it is missing the panel shows a neutral placeholder, so the HUD works
- * before any demo clips are added.
+ * Demo clips are loaded from `/clips/<slug>.mp4` (e.g. THANK YOU → thank-you.mp4,
+ * but server glosses are single-token so slug == gloss). be-server serves these
+ * from its clips dir and Vite proxies `/clips`. If a clip is missing the panel
+ * shows a neutral placeholder, so the HUD works before any demo clips are built.
  *
  * The word panel + stats only appear during the countdown/race, never on the
  * idle pre-match screen.
@@ -99,22 +99,24 @@ export class Hud {
   private renderWord(word: Word): void {
     this.el.word.textContent = word.text
 
-    // Visual cue: a looping gif/image of the sign. No text instructions.
+    // Visual cue: a looping reference clip of the sign. No text instructions.
     this.el.demo.innerHTML = ''
     this.el.demo.classList.remove('no-demo')
     const key = slug(word.text)
-    const img = document.createElement('img')
-    img.className = 'hud-demo-img'
-    img.alt = `Sign for ${word.text}`
-    // Use the temporary placeholder GIF if one is mapped; otherwise look for a
-    // real demo clip in /public/signs (Alex's dataset). Clearing SIGN_GIFS once
-    // the real assets land makes the local files take over automatically.
-    img.src = SIGN_GIFS[key] ?? `/signs/${key}.gif`
-    img.addEventListener('error', () => this.el.demo.classList.add('no-demo'), { once: true })
+    const video = document.createElement('video')
+    video.className = 'hud-demo-vid'
+    video.autoplay = true
+    video.loop = true
+    video.muted = true
+    video.playsInline = true
+    // be-server serves per-gloss reference clips at /clips/<slug>.mp4 (Vite
+    // proxies /clips). Server glosses are single-token so slug == gloss.
+    video.src = `/clips/${key}.mp4`
+    video.addEventListener('error', () => this.el.demo.classList.add('no-demo'), { once: true })
     const placeholder = document.createElement('div')
     placeholder.className = 'hud-demo-placeholder'
     placeholder.textContent = '🤟'
-    this.el.demo.append(img, placeholder)
+    this.el.demo.append(video, placeholder)
 
     this.el.pips.innerHTML = ''
     for (let i = 0; i < 5; i++) {

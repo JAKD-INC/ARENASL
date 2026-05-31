@@ -13,6 +13,8 @@ import type { Lobby, NetClient, NetEvent, NetListener, OpponentView } from './pr
 
 const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 const RIVAL: OpponentView = { playerId: 2, displayName: 'Rival', elo: 994 }
+/** Single-token glosses (== clip slugs) for the offline practice stub. */
+const PRACTICE_GLOSSES = ['hello', 'thanks', 'please', 'yes', 'no', 'name', 'help', 'good']
 
 export class MockNetClient implements NetClient {
   playerId: number | null = null
@@ -24,6 +26,7 @@ export class MockNetClient implements NetClient {
   private queuePosition = 0
   private timers = new Set<number>()
   private starting = false
+  private practiceWordIndex = 0
 
   async connect(displayName: string): Promise<void> {
     this.displayName = displayName || 'You'
@@ -95,6 +98,42 @@ export class MockNetClient implements NetClient {
 
   sendLandmark(): void {
     /* mock: the local SignCapture + MockDriver own the match offline */
+  }
+
+  // --- practice (offline stub) ----------------------------------------------
+  // No real recognizer offline, but we mimic the server's practice stream so the
+  // same PracticeDriver path type-checks and runs: emit practice.start, then walk
+  // a small set of single-token glosses via the existing recognitionUpdate event
+  // (rising wordIndex = a confirmed sign), advancing on a timer.
+
+  startPractice(): void {
+    this.clearTimers()
+    this.practiceWordIndex = 0
+    this.after(0, () => this.emit({ type: 'practiceStart', wordSeed: Math.floor(Math.random() * 1e9), datasetVersion: 'mock' }))
+    this.after(200, () => this.tickPractice())
+  }
+
+  stopPractice(): void {
+    this.clearTimers()
+  }
+
+  private tickPractice(): void {
+    const word = PRACTICE_GLOSSES[this.practiceWordIndex % PRACTICE_GLOSSES.length]
+    // Ramp strength up to ~0.9 then advance to the next word (rising index).
+    let strength = 0
+    const ramp = (): void => {
+      strength = Math.min(0.95, strength + 0.18)
+      this.emit({ type: 'recognitionUpdate', wordIndex: this.practiceWordIndex, word, strength, difficulty: 1 })
+      if (strength >= 0.9) {
+        this.after(700, () => {
+          this.practiceWordIndex += 1
+          this.tickPractice()
+        })
+      } else {
+        this.after(130, ramp)
+      }
+    }
+    ramp()
   }
 
   // --- subscription ---------------------------------------------------------

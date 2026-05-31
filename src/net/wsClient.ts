@@ -76,6 +76,12 @@ export class WebSocketNetClient implements NetClient {
     // Server accepts camelCase handLeft/handRight (populate_by_name alias).
     this.send({ type: 'landmark', t: frame.t, pose: frame.pose, handLeft: frame.handLeft, handRight: frame.handRight })
   }
+  startPractice(): void {
+    this.send({ type: 'practice.start' })
+  }
+  stopPractice(): void {
+    this.send({ type: 'practice.stop' })
+  }
 
   on(listener: NetListener): () => void {
     this.listeners.add(listener)
@@ -129,6 +135,9 @@ export class WebSocketNetClient implements NetClient {
       case 'warmup.start':
         this.emit({ type: 'warmupStart', wordSeed: msg.word_seed as number, datasetVersion: msg.dataset_version as string })
         break
+      case 'practice.start':
+        this.emit({ type: 'practiceStart', wordSeed: msg.word_seed as number, datasetVersion: msg.dataset_version as string })
+        break
       case 'match.start':
         this.emit({
           type: 'matchStart',
@@ -143,6 +152,9 @@ export class WebSocketNetClient implements NetClient {
           wordIndex: msg.word_index as number,
           word: msg.word as string,
           strength: msg.strength as number,
+          // The server may include per-word difficulty (word_at().difficulty);
+          // default to 1 when absent so the HUD/scoring stay correct either way.
+          difficulty: (msg.difficulty as number | undefined) ?? 1,
         })
         break
       case 'match.state':

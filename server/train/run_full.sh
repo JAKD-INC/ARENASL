@@ -26,6 +26,7 @@ EPOCHS="${EPOCHS:-60}"
 OUT="${OUT:-data/cache_full.npz}"
 ENC=data/encoder.onnx
 PROTO=data/prototypes.npz
+CLIPS="${CLIPS:-data/clips}"   # reference example clips (be-server serves /clips/<gloss>.mp4)
 
 [ -x "$PY" ] || { echo "ERROR: $PWD/$PY not found — create the venv per server/TRAINING.md"; exit 1; }
 mkdir -p data
@@ -40,11 +41,11 @@ fi
 # gloss selection: --all unless GLOSSES is set
 if [ -n "${GLOSSES:-}" ]; then GSEL=(--glosses ${GLOSSES}); else GSEL=(--all); fi
 
-echo "[run_full] 1/3 extract  (workers=$WORKERS per_gloss=$PER_GLOSS) -> $OUT"
+echo "[run_full] 1/3 extract  (workers=$WORKERS per_gloss=$PER_GLOSS) -> $OUT (clips -> $CLIPS)"
 if [ -f "$OUT" ]; then
   echo "  $OUT exists; skipping extraction (delete it to re-extract)"
 else
-  time PYTHONPATH=. "$PY" -m train.dataset "${GSEL[@]}" --per-gloss "$PER_GLOSS" --workers "$WORKERS" --out "$OUT"
+  time PYTHONPATH=. "$PY" -m train.dataset "${GSEL[@]}" --per-gloss "$PER_GLOSS" --workers "$WORKERS" --out "$OUT" --clips-dir "$CLIPS"
 fi
 
 echo "[run_full] 2/3 train    (epochs=$EPOCHS, GPU if available) -> $ENC"

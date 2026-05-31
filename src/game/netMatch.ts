@@ -78,7 +78,7 @@ export class NetMatchDriver {
         }
         this.lastWordIndex = e.wordIndex
         this.peakStrength = Math.max(this.peakStrength, e.strength)
-        this.store.setNetWord(e.wordIndex, e.word)
+        this.store.setNetWord(e.wordIndex, e.word, e.difficulty)
         if (!confirmed) this.captureUI.online(e.strength)
         this.onDebug?.(`reco w#${e.wordIndex} "${e.word}" strength=${e.strength.toFixed(2)}`)
         break

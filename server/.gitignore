@@ -11,3 +11,7 @@ arena.db
 arena.db-wal
 arena.db-shm
 replays/
+
+# Training artifacts + downloaded metadata (generated, not source)
+data/
+WLASL_v0.3.json

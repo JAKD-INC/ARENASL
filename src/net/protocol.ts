@@ -55,7 +55,8 @@ export type NetEvent =
   | { type: 'warmupStart'; wordSeed: number; datasetVersion: string }
   | { type: 'matchStart'; matchId: string; wordSeed: number; recordStartMs: number }
   | { type: 'matchState'; matchId: string; players: PlayerProgress[] }
-  | { type: 'recognitionUpdate'; wordIndex: number; word: string; strength: number }
+  | { type: 'recognitionUpdate'; wordIndex: number; word: string; strength: number; difficulty: number }
+  | { type: 'practiceStart'; wordSeed: number; datasetVersion: string }
   | { type: 'matchOver'; matchId: string; winnerId: number | null; elo: number | null; eloDelta: number | null }
   | { type: 'opponentStatus'; playerId: number; connected: boolean }
 
@@ -82,6 +83,12 @@ export interface NetClient {
 
   // in-match: stream landmarks up; the server recognizes and streams results back
   sendLandmark(frame: LandmarkPayload): void
+
+  // practice: a SOLO server recognizer (no matchmaking). Start/stop bookend a
+  // dedicated stream; landmarks flow over the same sendLandmark seam and results
+  // come back as the existing `recognitionUpdate` events.
+  startPractice(): void
+  stopPractice(): void
 
   on(listener: NetListener): () => void
 

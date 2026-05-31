@@ -272,7 +272,7 @@ body {
   place-items: center;
 }
 
-.hud-demo-img {
+.hud-demo-vid {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -283,7 +283,7 @@ body {
   font-size: 3.4rem;
   animation: float 3s ease-in-out infinite;
 }
-.hud-demo.no-demo .hud-demo-img {
+.hud-demo.no-demo .hud-demo-vid {
   display: none;
 }
 .hud-demo.no-demo .hud-demo-placeholder {

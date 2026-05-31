@@ -56,6 +56,7 @@ class Settings(BaseSettings):
 
     # --- ASL recognition (server-side DTW; thresholds from the tuned backend) ---
     asl_templates_dir: str = "./data/templates"
+    asl_clips_dir: str = "./data/clips"  # reference example clips served at /clips
     asl_scale: float = 0.5          # DTW distance at which strength = 1/e
     asl_get_threshold: float = 0.6  # strength must peak above this to confirm
     asl_confirm_drop: float = 0.8   # confirm once strength falls to this × peak

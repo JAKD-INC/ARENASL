@@ -6,13 +6,16 @@ Run: `uvicorn app.main:app --reload` (dev).
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.staticfiles import StaticFiles
 
 from app import replay, state
 from app.auth.deps import get_current_user
 from app.auth.routes import router as auth_router
+from app.config import get_settings
 from app.lifespan import lifespan
 from app.models_db import User
 from app.words import get_dataset
@@ -22,6 +25,22 @@ app = FastAPI(title="ARENASL", lifespan=lifespan)
 
 app.include_router(auth_router)
 app.include_router(ws_router)
+
+
+def mount_clips(app_: FastAPI) -> bool:
+    """Mount the reference-clip directory at /clips, serving GET /clips/<gloss>.mp4.
+
+    Only mounts when the configured dir exists so tests/CI without built clips
+    still start. Returns whether the mount was added. Re-callable (tests clear
+    the settings cache and re-invoke after pointing the setting at a tmp dir)."""
+    clips_dir = Path(get_settings().asl_clips_dir)
+    if not clips_dir.is_dir():
+        return False
+    app_.mount("/clips", StaticFiles(directory=str(clips_dir)), name="clips")
+    return True
+
+
+mount_clips(app)
 
 
 @app.get("/health", tags=["meta"])

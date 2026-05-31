@@ -16,10 +16,11 @@ class Player:
     id: int
     display_name: str
     elo: int
-    status: str = "idle"  # idle | in_lobby | queued | in_match
+    status: str = "idle"  # idle | in_lobby | queued | in_match | practice
     lobby_code: str | None = None
     match_id: str | None = None  # set when the lobby fills; used to route signaling
-    warmup_session: object | None = None  # RecognitionSession while queued (practice)
+    warmup_session: object | None = None  # RecognitionSession while queued (warmup)
+    practice_session: object | None = None  # SOLO RecognitionSession in practice mode
 
 
 @dataclass

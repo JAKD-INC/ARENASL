@@ -43,6 +43,14 @@ class LobbyReady(BaseModel):
     ready: bool  # ready => set up (dataset/recognizer/camera/peer) and want to start
 
 
+class PracticeStartReq(BaseModel):
+    type: Literal["practice.start"]
+
+
+class PracticeStop(BaseModel):
+    type: Literal["practice.stop"]
+
+
 class Signal(BaseModel):
     type: Literal["signal"]
     data: dict  # opaque WebRTC sdp/ice/bye; the server never parses this
@@ -63,7 +71,18 @@ class Landmark(BaseModel):
 
 
 ClientMessage = Annotated[
-    Union[Auth, QueueJoin, QueueLeave, LobbyCreate, LobbyJoin, LobbyReady, Signal, Landmark],
+    Union[
+        Auth,
+        QueueJoin,
+        QueueLeave,
+        LobbyCreate,
+        LobbyJoin,
+        LobbyReady,
+        PracticeStartReq,
+        PracticeStop,
+        Signal,
+        Landmark,
+    ],
     Field(discriminator="type"),
 ]
 client_adapter: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -90,6 +109,15 @@ def error(code: str, message: str) -> Error:
 
 class WarmupStart(BaseModel):
     type: Literal["warmup.start"] = "warmup.start"
+    word_seed: int
+    dataset_version: str
+
+
+class PracticeStart(BaseModel):
+    """Acks {type:"practice.start"}: a SOLO recognizer is live (no matchmaking).
+    Carries the seeded word stream + dataset version, like warmup.start."""
+
+    type: Literal["practice.start"] = "practice.start"
     word_seed: int
     dataset_version: str
 
@@ -154,12 +182,15 @@ class MatchState(BaseModel):
 
 class RecognitionUpdate(BaseModel):
     """Per-frame feedback to the signing player (drives the strength UI). Sent
-    while a sign is in progress (no get/miss yet)."""
+    while a sign is in progress (no get/miss yet). `difficulty` is the word's
+    catalog word_strength, so the client's setNetWord(index, word, difficulty)
+    receives the real value instead of defaulting."""
 
     type: Literal["recognition.update"] = "recognition.update"
     word_index: int
     word: str
     strength: float
+    difficulty: float = 1.0
 
 
 class MatchOver(BaseModel):
