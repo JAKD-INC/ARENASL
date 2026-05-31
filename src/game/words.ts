@@ -51,16 +51,20 @@ export class WordStream {
   private index = 0
   /** Avoid repeating the same word back-to-back. */
   private lastPick = -1
+  /** The (optionally difficulty-filtered) pool this stream draws from. */
+  private pool: WordSpec[]
 
-  constructor(seed = 1) {
+  constructor(seed = 1, maxDifficulty?: number) {
     this.rand = mulberry32(seed)
+    const filtered = maxDifficulty ? POOL.filter((w) => w.difficulty <= maxDifficulty) : POOL
+    this.pool = filtered.length ? filtered : POOL
   }
 
   next(): Word {
-    let pick = Math.floor(this.rand() * POOL.length)
-    if (pick === this.lastPick) pick = (pick + 1) % POOL.length
+    let pick = Math.floor(this.rand() * this.pool.length)
+    if (pick === this.lastPick) pick = (pick + 1) % this.pool.length
     this.lastPick = pick
-    const spec = POOL[pick]
+    const spec = this.pool[pick]
     const word: Word = {
       id: String(this.index),
       text: spec.text,

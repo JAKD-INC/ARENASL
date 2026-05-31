@@ -33,7 +33,7 @@ export interface Word {
   difficulty: number
 }
 
-export type GamePhase = 'idle' | 'countdown' | 'racing' | 'finished'
+export type GamePhase = 'idle' | 'countdown' | 'racing' | 'finished' | 'practice'
 
 export interface GameState {
   phase: GamePhase

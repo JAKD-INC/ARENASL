@@ -8,20 +8,27 @@ import type { LookController } from './controller.ts'
  * feed immediately through the {@link LookController}; only one look is active at
  * a time, and the selection persists across tabs.
  */
+export interface LookPickerCallbacks {
+  /** Start a real match vs the rival. */
+  onStart: () => void
+  /** Enter the solo Practice room. */
+  onPractice: () => void
+}
+
 export class LookPicker {
   private root: HTMLElement
   private controller: LookController
-  private onStart: () => void
+  private cb: LookPickerCallbacks
   private swatchRow!: HTMLDivElement
   private tabRow!: HTMLDivElement
   private activeGroup: LookCategoryGroup = LOOK_GROUPS[0]
   private selectedId: string | null = null
   private buttons = new Map<string, HTMLButtonElement>()
 
-  constructor(root: HTMLElement, controller: LookController, onStart: () => void) {
+  constructor(root: HTMLElement, controller: LookController, cb: LookPickerCallbacks) {
     this.root = root
     this.controller = controller
-    this.onStart = onStart
+    this.cb = cb
     this.build()
     this.showGroup(this.activeGroup)
   }
@@ -36,7 +43,10 @@ export class LookPicker {
         </div>
         <div class="look-tabs" data-tabs></div>
         <div class="skin-swatches" data-swatches></div>
-        <button class="btn-tactile btn-coral lobby-start" type="button" data-start>Start match</button>
+        <div class="lobby-actions">
+          <button class="btn-tactile btn-light lobby-practice" type="button" data-practice>Practice</button>
+          <button class="btn-tactile btn-coral lobby-start" type="button" data-start>Start match</button>
+        </div>
       </div>
     `
     this.tabRow = this.root.querySelector<HTMLDivElement>('[data-tabs]')!
@@ -53,7 +63,21 @@ export class LookPicker {
     }
 
     this.root.querySelector<HTMLButtonElement>('[data-start]')!
-      .addEventListener('click', () => this.onStart())
+      .addEventListener('click', () => this.cb.onStart())
+    this.root.querySelector<HTMLButtonElement>('[data-practice]')!
+      .addEventListener('click', () => this.cb.onPractice())
+  }
+
+  show(): void {
+    this.root.classList.remove('hidden')
+  }
+
+  hide(): void {
+    this.root.classList.add('hidden')
+  }
+
+  toggle(): void {
+    this.root.classList.toggle('hidden')
   }
 
   private showGroup(group: LookCategoryGroup): void {

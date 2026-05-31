@@ -13,6 +13,7 @@ import { MAX_HP } from '../game/scoring.ts'
  */
 export class ResultsScreen {
   private root: HTMLElement
+  private updateBreakdown: (() => void) | null = null
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -73,7 +74,10 @@ export class ResultsScreen {
         <div class="replay-frame" data-replay></div>
 
         <div class="results-section-title">Tug-of-war log</div>
-        <ul class="breakdown-list" data-breakdown></ul>
+        <div class="breakdown-wrap" data-bdwrap>
+          <ul class="breakdown-list" data-breakdown></ul>
+          <div class="breakdown-cue" aria-hidden="true">⌄</div>
+        </div>
       </div>
 
       <div class="results-actions">
@@ -86,11 +90,34 @@ export class ResultsScreen {
     this.root.querySelector('[data-again]')?.addEventListener('click', () => location.reload())
 
     this.mountReplay(replay.videoUrl)
+    this.setupBreakdownScroll()
     void this.animate(steps, me.score, opp.score)
   }
 
   hide(): void {
     this.root.classList.add('hidden')
+  }
+
+  /**
+   * Make the tug-of-war log's scrollability visible: edge fades + a bobbing cue
+   * that appear only when there's hidden content above/below. (The scrollbar
+   * itself is also styled slim rather than hidden.)
+   */
+  private setupBreakdownScroll(): void {
+    const wrap = this.root.querySelector<HTMLDivElement>('[data-bdwrap]')
+    const list = this.root.querySelector<HTMLUListElement>('[data-breakdown]')
+    if (!wrap || !list) return
+    const update = (): void => {
+      const overflowing = list.scrollHeight > list.clientHeight + 2
+      const atTop = list.scrollTop <= 2
+      const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 2
+      wrap.classList.toggle('show-top', overflowing && !atTop)
+      wrap.classList.toggle('show-bottom', overflowing && !atBottom)
+    }
+    list.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update)
+    this.updateBreakdown = update
+    update()
   }
 
   private mountReplay(videoUrl: string | null): void {
@@ -143,9 +170,11 @@ export class ResultsScreen {
           <span class="bd-delta">${step.delta === 0 ? '–' : sign + step.delta}</span>`
         list.append(li)
         list.scrollTop = list.scrollHeight
+        this.updateBreakdown?.()
       }
       await delay(steps.length > 20 ? 60 : 150)
     }
+    this.updateBreakdown?.()
   }
 
   private countUp(selector: string, target: number): void {

@@ -57,6 +57,11 @@ export class GameStore {
   private oppStream: WordStream
   private oppCurrentWord: Word
   private oppCleared = 0
+  /** Stakes-free word stream for Practice mode (biased to easy words). */
+  private practiceStream: WordStream | null = null
+  private seed: number
+  private myName: string
+  private oppName: string
   private listeners: { [K in keyof EventMap]: Set<Listener<EventMap[K]>> } = {
     change: new Set(),
     phase: new Set(),
@@ -69,15 +74,17 @@ export class GameStore {
   private startedAt = 0
 
   constructor(opts: { seed?: number; myName?: string; oppName?: string } = {}) {
-    const seed = opts.seed ?? 1
-    this.stream = new WordStream(seed)
-    this.oppStream = new WordStream(seed)
+    this.seed = opts.seed ?? 1
+    this.myName = opts.myName ?? 'You'
+    this.oppName = opts.oppName ?? 'Opponent'
+    this.stream = new WordStream(this.seed)
+    this.oppStream = new WordStream(this.seed)
     this.oppCurrentWord = this.oppStream.next()
     this.state = {
       phase: 'idle',
       players: {
-        me: newPlayer('me', opts.myName ?? 'You'),
-        opponent: newPlayer('opponent', opts.oppName ?? 'Opponent'),
+        me: newPlayer('me', this.myName),
+        opponent: newPlayer('opponent', this.oppName),
       },
       currentWord: this.stream.next(),
       cleared: 0,
@@ -85,6 +92,51 @@ export class GameStore {
       elapsedMs: 0,
       winner: null,
     }
+  }
+
+  // --- session control ------------------------------------------------------
+
+  /**
+   * Reset to a fresh, stakes-free **Practice** session: easy words, no opponent,
+   * no HP/win-loss. The capture loop and feedback run exactly as in a match, so
+   * the player learns the controls safely. Both players race nothing here.
+   */
+  startPractice(maxDifficulty = 2): void {
+    this.practiceStream = new WordStream(freshSeed(), maxDifficulty)
+    this.state.players.me = newPlayer('me', this.myName)
+    this.state.cleared = 0
+    this.state.elapsedMs = 0
+    this.state.winner = null
+    this.state.currentWord = this.practiceStream.next()
+    this.setPhase('practice')
+  }
+
+  /** Leave Practice and return to the idle lobby. */
+  endPractice(): void {
+    this.practiceStream = null
+    this.setPhase('idle')
+  }
+
+  /**
+   * Reset to a fresh **match** session so mode-switching (lobby ⇄ practice ⇄
+   * match) never carries words/score over. Call before {@link runCountdown}.
+   */
+  beginMatch(): void {
+    this.practiceStream = null
+    this.stream = new WordStream(this.seed)
+    this.oppStream = new WordStream(this.seed)
+    this.oppCurrentWord = this.oppStream.next()
+    this.oppCleared = 0
+    this.tugHistory.length = 0
+    this.startedAt = 0
+    this.state.players.me = newPlayer('me', this.myName)
+    this.state.players.opponent = newPlayer('opponent', this.oppName)
+    this.state.currentWord = this.stream.next()
+    this.state.cleared = 0
+    this.state.elapsedMs = 0
+    this.state.countdown = 3
+    this.state.winner = null
+    this.setPhase('idle')
   }
 
   // --- subscription ---------------------------------------------------------
@@ -155,13 +207,13 @@ export class GameStore {
     const isMe = result.player === 'me'
     const word = isMe ? this.state.currentWord : this.oppCurrentWord
     const player = this.state.players[result.player]
+    const practice = this.state.phase === 'practice'
+    const live = this.state.phase === 'racing' || practice
 
     // Stale/early signs don't count. The local player's word id must match
     // (guards recognition races); opponent signs are validated server-side.
     const accepted =
-      this.state.phase === 'racing' &&
-      result.accuracy >= ACCEPT_THRESHOLD &&
-      (!isMe || result.wordId === word.id)
+      live && result.accuracy >= ACCEPT_THRESHOLD && (!isMe || result.wordId === word.id)
 
     let dmg = 0
     let pts = 0
@@ -170,11 +222,12 @@ export class GameStore {
       pts = points(result.accuracy, result.timeMs, player.combo)
       player.score += pts
       dmg = damage(word.difficulty, result.accuracy)
-      this.applyTug(result.player, dmg, word)
+      // Practice has no opponent and no HP — score and learn, nothing to lose.
+      if (!practice) this.applyTug(result.player, dmg, word)
 
       if (isMe) {
         this.state.cleared += 1
-        this.state.currentWord = this.stream.next()
+        this.state.currentWord = (practice && this.practiceStream ? this.practiceStream : this.stream).next()
       } else {
         this.oppCleared += 1
         this.oppCurrentWord = this.oppStream.next()
@@ -195,7 +248,7 @@ export class GameStore {
     this.emit('change', this.state)
 
     // Resolve the end condition after notifying listeners of the final hit.
-    if (accepted) this.checkDeath()
+    if (accepted && !practice) this.checkDeath()
     return outcome
   }
 
@@ -240,4 +293,9 @@ function delay(ms: number): Promise<void> {
 
 function nowMs(): number {
   return performance.now()
+}
+
+/** A non-deterministic seed so each Practice session varies. */
+function freshSeed(): number {
+  return Math.floor(Math.random() * 1e9)
 }

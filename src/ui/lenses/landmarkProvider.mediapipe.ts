@@ -1,13 +1,20 @@
-import { FaceLandmarker, FilesetResolver, type NormalizedLandmark } from '@mediapipe/tasks-vision'
+import {
+  FaceLandmarker,
+  FilesetResolver,
+  HandLandmarker,
+  type NormalizedLandmark,
+} from '@mediapipe/tasks-vision'
 import type { Blendshapes, Landmark, LandmarkFrame, LandmarkProvider } from '../../game/types.ts'
 
 /**
- * Standalone {@link LandmarkProvider} backed by MediaPipe's FaceLandmarker:
- * 478 face-mesh points + ARKit-style blendshapes (expression scores), which
- * drive the face lenses and their expression triggers.
+ * Standalone {@link LandmarkProvider} backed by MediaPipe:
+ *  - {@link FaceLandmarker} → 478 face-mesh points + ARKit blendshapes, which
+ *    drive the cosmetic face lenses and their expression triggers.
+ *  - {@link HandLandmarker} → 21 points per hand (up to two), which drive the
+ *    gameplay: the sign-capture loop reads these to tell when the player is
+ *    actually signing. This is the seam Alex's real ASL recognizer replaces.
  *
- * Runs on a rAF loop, only when the video presents a fresh frame. In production
- * Alex's recognizer can implement this same interface so MediaPipe runs once.
+ * Both run on one rAF loop, only when the video presents a fresh frame.
  *
  * Landmark x is mirrored here (1 - x) so coordinates match the mirrored selfie
  * view the player actually sees.
@@ -17,10 +24,13 @@ import type { Blendshapes, Landmark, LandmarkFrame, LandmarkProvider } from '../
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm'
 const FACE_MODEL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'
+const HAND_MODEL =
+  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
 
 export class MediaPipeLandmarkProvider implements LandmarkProvider {
   private video: HTMLVideoElement
   private face: FaceLandmarker | null = null
+  private hands: HandLandmarker | null = null
   private frame: LandmarkFrame | null = null
   private rafId = 0
   private lastVideoTime = -1
@@ -31,20 +41,31 @@ export class MediaPipeLandmarkProvider implements LandmarkProvider {
 
   async start(): Promise<void> {
     const fileset = await FilesetResolver.forVisionTasks(WASM_BASE)
-    this.face = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: FACE_MODEL, delegate: 'GPU' },
-      runningMode: 'VIDEO',
-      numFaces: 1,
-      outputFaceBlendshapes: true,
-      outputFacialTransformationMatrixes: false,
-    })
+    const [face, hands] = await Promise.all([
+      FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: FACE_MODEL, delegate: 'GPU' },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+        outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: false,
+      }),
+      HandLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: HAND_MODEL, delegate: 'GPU' },
+        runningMode: 'VIDEO',
+        numHands: 2,
+      }),
+    ])
+    this.face = face
+    this.hands = hands
     this.loop()
   }
 
   stop(): void {
     cancelAnimationFrame(this.rafId)
     this.face?.close()
+    this.hands?.close()
     this.face = null
+    this.hands = null
     this.frame = null
   }
 
@@ -54,22 +75,23 @@ export class MediaPipeLandmarkProvider implements LandmarkProvider {
 
   private loop = (): void => {
     this.rafId = requestAnimationFrame(this.loop)
-    const face = this.face
-    if (!face || this.video.readyState < 2) return
+    const { face, hands } = this
+    if (!face || !hands || this.video.readyState < 2) return
 
     // Only run inference when the camera presents a new frame.
     if (this.video.currentTime === this.lastVideoTime) return
     this.lastVideoTime = this.video.currentTime
 
     const ts = performance.now()
-    const result = face.detectForVideo(this.video, ts)
-    const faceLm = result.faceLandmarks[0]
+    const faceResult = face.detectForVideo(this.video, ts)
+    const handResult = hands.detectForVideo(this.video, ts)
+    const faceLm = faceResult.faceLandmarks[0]
 
     this.frame = {
       face: faceLm ? faceLm.map(toMirrored) : null,
-      hands: [],
+      hands: handResult.landmarks.map((hand) => hand.map(toMirrored)),
       pose: null,
-      blendshapes: readBlendshapes(result.faceBlendshapes?.[0]?.categories),
+      blendshapes: readBlendshapes(faceResult.faceBlendshapes?.[0]?.categories),
       atMs: ts,
     }
   }
