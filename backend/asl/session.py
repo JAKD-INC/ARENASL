@@ -17,7 +17,8 @@ class State:
     score: int              # running score
     event: Optional[str]    # "get", "miss", or None this frame
     confirmed: Optional[str]  # gloss confirmed THIS frame (on "get"), else None
-    distance: Optional[float] = None  # raw best DTW distance (debug/calibration)
+    distance: Optional[float] = None  # raw best distance to target (debug)
+    topk: Optional[list] = None  # closest glosses overall (debug ranking)
 
 
 class Session:
@@ -37,6 +38,8 @@ class Session:
         lookahead: int = 3,
         overtake_frames: int = 2,
         confirm_hold: int = 10,
+        warmup_frames: int = 12,
+        rank_every: Optional[int] = None,
     ):
         if lookahead < 1:
             # push() probes queue[1] (the next target) every frame for the
@@ -55,6 +58,7 @@ class Session:
         self._miss_points = miss_points
         self._overtake_frames = overtake_frames
         self._confirm_hold = confirm_hold
+        self._warmup_frames = warmup_frames
 
         self._queue: deque[str] = deque(
             next(prompts) for _ in range(lookahead + 1)
@@ -65,6 +69,12 @@ class Session:
         self._overtake = 0
         self._hold = 0
         self._target_start: Optional[float] = None
+        # Frames seen since the last advance (or session start). The window is a
+        # sliding buffer that, right after an advance, still holds frames from
+        # the PREVIOUS sign; until enough new frames flow in, that stale tail can
+        # spuriously confirm the new target and cascade more passes. Gate every
+        # confirm/get path until this counter reaches `warmup_frames`.
+        self._frames_since_advance = 0
 
     def _advance(self) -> None:
         self._queue.popleft()
@@ -74,6 +84,7 @@ class Session:
         self._overtake = 0
         self._hold = 0
         self._target_start = None
+        self._frames_since_advance = 0
 
     def state(
         self,
@@ -94,6 +105,7 @@ class Session:
         if self._target_start is None:
             self._target_start = t
         self._buffer.append(frame)
+        self._frames_since_advance += 1
 
         window = np.array(self._buffer)
         strength = self._matcher.strength(window, self._queue[0])
@@ -126,10 +138,16 @@ class Session:
             self._hold = 0
         sustained_hold = self._hold >= self._confirm_hold
 
+        # After an advance the sliding window still holds the tail of the
+        # PREVIOUS sign; a confirm fired off that stale window would cascade
+        # passes. Block EVERY confirm/get path until `warmup_frames` fresh frames
+        # have flowed in for the current target. The miss budget is unaffected.
+        warmed_up = self._frames_since_advance >= self._warmup_frames
+
         # Sign confirmed once it peaked above threshold AND any of: the signer
         # moved on (a dip from the peak, or the next target SUSTAINED overtaking
         # it), OR the sign was simply HELD above threshold long enough.
-        if self._peak >= self._get_threshold and (
+        if warmed_up and self._peak >= self._get_threshold and (
             strength <= self._peak * self._confirm_drop
             or sustained_overtake
             or sustained_hold

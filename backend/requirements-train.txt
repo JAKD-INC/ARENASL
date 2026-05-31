@@ -1,0 +1,5 @@
+# Offline training only (Task 2). NOT needed by the server image, which loads the
+# exported encoder.onnx via onnxruntime (in requirements.txt). Install for a train run:
+#   pip install -r requirements-train.txt
+torch>=2.2        # CPU is fine; for GPU install the matching CUDA wheel
+onnx>=1.16

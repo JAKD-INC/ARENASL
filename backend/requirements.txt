@@ -3,3 +3,4 @@ dtaidistance>=2.4
 pytest>=8.0
 fastapi>=0.115
 uvicorn[standard]>=0.30
+onnxruntime>=1.18   # server-side inference for the learned EmbeddingMatcher

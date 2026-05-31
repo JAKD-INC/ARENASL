@@ -1,6 +1,7 @@
 import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from asl.embedding_matcher import EmbeddingMatcher
 from asl.library import load_templates
 from asl.matcher import Matcher
 from asl.schema import match_features
@@ -9,6 +10,11 @@ from server.connection import handle_message
 from server.prompts import prompt_stream
 
 TEMPLATES_DIR = os.environ.get("ASL_TEMPLATES_DIR", "data/templates")
+# Trained motion-embedding artifacts (Plan 3). When BOTH exist, the app swaps the
+# DTW Matcher for the learned EmbeddingMatcher behind the same strength interface;
+# otherwise it falls back to DTW so the server stays runnable pre-training.
+ENCODER_PATH = os.environ.get("ASL_ENCODER", "data/encoder.onnx")
+PROTOTYPES_PATH = os.environ.get("ASL_PROTOTYPES", "data/prototypes.npz")
 
 # Calibration inherited from Plan 1's settled values (tune against real data).
 # Calibration is env-tunable so you can dial it in live (restart, no rebuild):
@@ -25,12 +31,24 @@ MISS_BUDGET = None  # no auto-miss/timer — advance only on a correct sign
 # Small window so strength tracks RECENT motion and reacts fast. (Frame-based, so
 # at low fps it spans more time — keep it short.)
 WINDOW_SIZE = int(os.environ.get("ASL_WINDOW_SIZE", "16"))
+# Cascade guard: frames the window must refill after a get before any confirm path
+# fires (the embedding must reflect the NEW sign first). Defaults to one full window.
+WARMUP_FRAMES = int(os.environ.get("ASL_WARMUP", str(WINDOW_SIZE)))
 
-# Reduce templates to the hands-only xy match features (same as live frames).
-_templates = {g: [match_features(t) for t in seqs]
-              for g, seqs in load_templates(TEMPLATES_DIR).items()}
-_matcher = Matcher(_templates, scale=SCALE)
-_vocab = sorted(_templates)
+
+def _build_matcher():
+    """Prefer the trained EmbeddingMatcher when its artifacts exist; otherwise fall
+    back to the DTW Matcher over the reference templates. Returns (matcher, vocab)."""
+    if os.path.isfile(ENCODER_PATH) and os.path.isfile(PROTOTYPES_PATH):
+        matcher = EmbeddingMatcher.from_files(ENCODER_PATH, PROTOTYPES_PATH)
+        return matcher, sorted(matcher._protos)
+    # Reduce templates to the hands-only xy match features (same as live frames).
+    templates = {g: [match_features(t) for t in seqs]
+                 for g, seqs in load_templates(TEMPLATES_DIR).items()}
+    return Matcher(templates, scale=SCALE), sorted(templates)
+
+
+_matcher, _vocab = _build_matcher()
 
 app = FastAPI()
 
@@ -42,7 +60,7 @@ async def ws(websocket: WebSocket):
         _matcher, prompt_stream(_vocab, seed=0),
         get_threshold=GET_THRESHOLD, confirm_drop=CONFIRM_DROP,
         miss_budget=MISS_BUDGET, window_size=WINDOW_SIZE, lookahead=3,
-        confirm_hold=CONFIRM_HOLD,
+        confirm_hold=CONFIRM_HOLD, warmup_frames=WARMUP_FRAMES,
     )
     try:
         while True:

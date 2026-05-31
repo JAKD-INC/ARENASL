@@ -30,3 +30,9 @@ class Matcher:
     def strength(self, window: np.ndarray, target: str) -> float:
         """Return match strength in [0, 1] of `window` against `target`."""
         return math.exp(-self.best_distance(window, target) / self._scale)
+
+    def rank(self, window: np.ndarray, k: int = 3) -> list[dict]:
+        """Debug: the k closest glosses to `window` by best DTW distance.
+        Reveals whether the sign being performed is actually the nearest match."""
+        scored = sorted((self.best_distance(window, g), g) for g in self._templates)
+        return [{"gloss": g, "distance": round(d, 3)} for d, g in scored[:k]]
