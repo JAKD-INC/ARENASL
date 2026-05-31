@@ -38,6 +38,9 @@ RUN pip install -e ".[dev]"
 # Defaults; secrets + volume paths are supplied by docker-compose.
 ENV SIGNS_DATASET_PATH=/app/app/data/signs.json \
     ASL_TEMPLATES_DIR=/data/templates \
+    ASL_ENCODER_PATH=/data/encoder.onnx \
+    ASL_PROTOTYPES_PATH=/data/prototypes.npz \
+    ASL_CLIPS_DIR=/data/clips \
     DB_URL=sqlite:////data/arena.db \
     REPLAY_DIR=/data/replays
 

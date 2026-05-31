@@ -75,5 +75,20 @@ services:
       - JWT_SECRET=${JWT_SECRET:-dev-insecure-jwt-secret-change-me}
       - TURN_SECRET=${TURN_SECRET:-dev-insecure-turn-secret-change-me}
 
+  # One-shot: load trained artifacts from server/data into the shared volume that
+  # be-server reads (encoder.onnx + prototypes.npz + clips/). Run after training:
+  #     docker compose run --rm load-weights
+  # Then `docker compose up -d --force-recreate be-server` picks them up (auto mode).
+  load-weights:
+    image: busybox
+    volumes:
+      - asl-data:/data
+      - ./server/data:/src:ro
+    command: >
+      sh -c "cp -v /src/encoder.onnx /src/prototypes.npz /data/ 2>/dev/null || true;
+             [ -d /src/clips ] && cp -rv /src/clips /data/clips || true;
+             [ -d /src/templates ] && cp -rv /src/templates /data/templates || true;
+             echo '--- /data now:' && ls -la /data"
+
 volumes:
   asl-data:
