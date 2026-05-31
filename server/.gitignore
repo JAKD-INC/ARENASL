@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Local secrets & runtime data
+.env
+arena.db
+arena.db-wal
+arena.db-shm
+replays/
