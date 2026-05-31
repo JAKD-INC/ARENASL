@@ -40,9 +40,11 @@ def _topk_accuracy(logits: torch.Tensor, labels: torch.Tensor, k: int) -> float:
 
 def evaluate(model: MotionEncoder, loader) -> dict:
     model.eval()
+    device = next(model.parameters()).device  # eval batches must match the model
     n, top1_sum, top5_sum = 0, 0.0, 0.0
     with torch.no_grad():
         for x, y in loader:
+            x, y = x.to(device), y.to(device)
             _, logits = model(x)
             b = y.shape[0]
             top1_sum += _topk_accuracy(logits, y, 1) * b
@@ -87,6 +89,8 @@ def export_onnx(model: MotionEncoder, path: str):
     The exported graph maps a (1, T, 84) input -> embedding (1, emb_dim). Only the
     embedding is needed live, so we export a thin module wrapping `embed`."""
     model.eval()
+    model.to("cpu")  # trace on CPU so the example input + params share a device
+                     # (the model is on cuda after a GPU training run)
 
     class _EmbedOnly(nn.Module):
         def __init__(self, enc):
