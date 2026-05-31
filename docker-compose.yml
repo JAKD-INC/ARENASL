@@ -1,0 +1,79 @@
+# ARENASL — dockerized live app.
+#
+# Just run the app and open http://localhost:8000 (camera works on localhost):
+#     docker compose up app
+# On first run it auto-builds the default WLASL subset into the shared volume
+# (downloads from HuggingFace, ~minutes); later starts are fast.
+#
+# Optional — build a custom vocabulary explicitly into the volume beforehand:
+#     docker compose run --rm builder \
+#       python -m build.build_library --out /data/templates --clips /data/clips \
+#       --glosses book drink help eat --per-gloss 6
+
+services:
+  # One-shot: download a WLASL subset, extract MediaPipe landmarks, write
+  # <gloss>__N.npy templates + one display clip per gloss into the volume.
+  builder:
+    build: .
+    image: arenasl:latest
+    command:
+      - python
+      - -m
+      - build.build_library
+      - --out
+      - /data/templates
+      - --clips
+      - /data/clips
+      - --per-gloss
+      - "8"
+    # HF_TOKEN raises HuggingFace rate limits for large parallel builds (--all).
+    # Read from .env (gitignored) or the host env; never baked into the image.
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - asl-data:/data
+
+  # The live server: serves the built frontend, /clips, /models, and /ws.
+  app:
+    build: .
+    image: arenasl:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - asl-data:/data
+    # First-run auto-build vocab (optional): ASL_BUILD_GLOSSES="book drink help"
+    # ASL_BUILD_PER_GLOSS=4 docker compose up app
+    # Recognition calibration (optional): ASL_SCALE, ASL_GET_THRESHOLD,
+    # ASL_CONFIRM_DROP, ASL_WINDOW_SIZE — tune live via the HUD's dist readout.
+    environment:
+      - ASL_BUILD_GLOSSES
+      - ASL_BUILD_PER_GLOSS
+      - ASL_SCALE
+      - ASL_GET_THRESHOLD
+      - ASL_CONFIRM_DROP
+      - ASL_CONFIRM_HOLD
+      - ASL_WINDOW_SIZE
+    restart: unless-stopped
+
+  # Our game server: auth, matchmaking, lobbies, signaling, authoritative duel,
+  # replay, and (vendored) server-side ASL recognition. Linux runtime gives
+  # dtaidistance's compiled C DTW. Run tests with:
+  #     docker compose run --rm be-server pytest -q
+  # Run the server:
+  #     docker compose up be-server   (http://localhost:8001)
+  be-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: arenasl-server:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - asl-data:/data            # shares WLASL templates built by `builder`
+    environment:
+      # Dev fallbacks; override via host env or server/.env for anything real.
+      - JWT_SECRET=${JWT_SECRET:-dev-insecure-jwt-secret-change-me}
+      - TURN_SECRET=${TURN_SECRET:-dev-insecure-turn-secret-change-me}
+
+volumes:
+  asl-data:
