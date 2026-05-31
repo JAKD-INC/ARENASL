@@ -22,6 +22,11 @@ os.environ.setdefault("SIGNS_DATASET_PATH", str(_DATASET))
 _REPLAY_DIR = tempfile.mkdtemp(prefix="arenasl-replays-")
 os.environ["REPLAY_DIR"] = _REPLAY_DIR
 
+# Recognition tests assert the DTW path; pin the mode so a trained encoder.onnx /
+# prototypes.npz sitting in ./data on a dev machine can't flip them to embedding.
+# (The learned matcher has its own unit tests via injected/real-onnx encode.)
+os.environ["ASL_MATCHER_MODE"] = "dtw"
+
 import shutil  # noqa: E402
 
 import pytest  # noqa: E402

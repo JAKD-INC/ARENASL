@@ -34,44 +34,54 @@ logger = logging.getLogger("arenasl.recognition")
 # against `Matcher` for back-compat.
 _matcher: Matcher | None = None
 _glosses: tuple[str, ...] = ()
+_uses_embedding: bool = False  # True when the learned EmbeddingMatcher is active
 
 
 def init_matcher(templates_dir: str | None = None, scale: float | None = None) -> tuple[str, ...]:
     """Load templates and build the shared matcher. Returns the gloss set.
 
-    By default (asl_matcher_mode=="dtw") builds the DTW `Matcher` from the WLASL
-    templates exactly as before. When asl_matcher_mode=="embedding" AND both the
-    encoder and prototypes files exist, builds the learned `EmbeddingMatcher`
-    instead (its glosses come from the prototypes file, not the templates dir).
-    Raises (FileNotFoundError/ValueError) if templates are missing — callers
+    asl_matcher_mode: "auto" (default) uses the learned `EmbeddingMatcher` when its
+    encoder + prototypes files exist, else the DTW `Matcher`; "embedding" forces the
+    learned one (warns + falls back to DTW if artifacts are missing); "dtw" forces
+    DTW. The embedding glosses come from the prototypes file, not the templates dir.
+    Raises (FileNotFoundError/ValueError) if DTW templates are missing — callers
     decide whether that's fatal."""
-    global _matcher, _glosses
+    global _matcher, _glosses, _uses_embedding
     s = get_settings()
 
-    if getattr(s, "asl_matcher_mode", "dtw") == "embedding":
-        encoder_path = getattr(s, "asl_encoder_path", "")
-        prototypes_path = getattr(s, "asl_prototypes_path", "")
-        if encoder_path and prototypes_path and os.path.exists(encoder_path) and os.path.exists(prototypes_path):
-            # Imported lazily so the default DTW path never requires onnxruntime
-            # (nor the embedding_matcher module being present).
-            from asl.embedding_matcher import EmbeddingMatcher
+    mode = getattr(s, "asl_matcher_mode", "auto")
+    encoder_path = getattr(s, "asl_encoder_path", "")
+    prototypes_path = getattr(s, "asl_prototypes_path", "")
+    have_artifacts = bool(
+        encoder_path and prototypes_path
+        and os.path.exists(encoder_path) and os.path.exists(prototypes_path)
+    )
 
-            _matcher = EmbeddingMatcher.from_files(encoder_path, prototypes_path)
-            _glosses = tuple(sorted(_matcher._protos))
-            logger.info("ASL embedding matcher loaded: %d glosses", len(_glosses))
-            return _glosses
+    if mode != "dtw" and have_artifacts:
+        # Imported lazily so the DTW path never requires onnxruntime.
+        from asl.embedding_matcher import EmbeddingMatcher
+
+        _matcher = EmbeddingMatcher.from_files(encoder_path, prototypes_path)
+        _glosses = tuple(sorted(_matcher._protos))
+        _uses_embedding = True
+        logger.info("ASL embedding matcher loaded: %d glosses", len(_glosses))
+        return _glosses
+    if mode == "embedding":
         logger.warning(
-            "asl_matcher_mode=embedding but encoder/prototypes missing "
-            "(%r / %r); falling back to DTW matcher",
-            encoder_path,
-            prototypes_path,
+            "asl_matcher_mode=embedding but encoder/prototypes missing (%r / %r); "
+            "falling back to DTW matcher", encoder_path, prototypes_path,
         )
 
+    _uses_embedding = False
     templates = load_templates(templates_dir or s.asl_templates_dir)
     _matcher = Matcher(templates, scale=scale if scale is not None else s.asl_scale)
     _glosses = tuple(sorted(templates))
     logger.info("ASL matcher loaded: %d glosses", len(_glosses))
     return _glosses
+
+
+def uses_embedding() -> bool:
+    return _uses_embedding
 
 
 def get_matcher() -> Matcher:
@@ -119,9 +129,10 @@ class RecognitionSession:
         s = get_settings()
         self._seed = seed
         self._index = 0
-        # "full" (default) feeds the full 147-dim frame; "hands" reduces the row
-        # to the 84-dim hand-xy match features (see asl.schema.match_features).
-        self._feature_mode = getattr(s, "asl_feature_mode", "full")
+        # Embedding prototypes are scored on hand-xy features, so couple the live
+        # reduction to the active matcher: embedding -> "hands", DTW -> the config
+        # default ("full" = the 147-dim frame).
+        self._feature_mode = "hands" if _uses_embedding else getattr(s, "asl_feature_mode", "full")
 
         kwargs = dict(
             get_threshold=s.asl_get_threshold,

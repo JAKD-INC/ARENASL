@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     recognition_fps_cap: int = 15   # server-side per-player frame budget (phase 2e)
 
     # --- ASL recognition (ADVANCED recognizer; OPT-IN, defaults reproduce today) ---
-    asl_matcher_mode: str = "dtw"          # "dtw" (default) or "embedding"
+    asl_matcher_mode: str = "auto"         # auto: embedding if artifacts exist, else dtw
     asl_feature_mode: str = "full"         # "full" (default) or "hands"
     asl_encoder_path: str = "./data/encoder.onnx"
     asl_prototypes_path: str = "./data/prototypes.npz"
