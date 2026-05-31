@@ -155,7 +155,7 @@ async function main(): Promise<void> {
     await sound.resume()
     const online = !(net instanceof MockNetClient)
     store.beginMatch(seed, opp.displayName)
-    await store.runCountdown(online ? 1 : 3)
+    await store.runCountdown(3)
     if (online) {
       // Server owns recognition/HP/words: pause the local heuristic, stream up.
       capture.pause()

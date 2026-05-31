@@ -327,6 +327,14 @@ export class GameStore {
     const pts = points(accuracy, 1500, me.combo)
     me.score += pts
     this.state.cleared += 1
+    // Record the landed sign for the results breakdown (online has no tug history).
+    this.tugHistory.push({
+      word: this.state.currentWord,
+      delta: pts,
+      myHp: me.hp,
+      oppHp: this.state.players.opponent.hp,
+      winner: 'me',
+    })
     const outcome: SignOutcome = {
       result: { player: 'me', wordId: this.state.currentWord.id, accuracy, timeMs: 0 },
       word: this.state.currentWord,
