@@ -5,6 +5,7 @@ from train.augment import (
     add_noise,
     augment,
     frame_dropout,
+    horizontal_flip,
     spatial_jitter,
     temporal_crop,
     time_warp,
@@ -100,6 +101,68 @@ def test_spatial_jitter_preserves_absent_hand_blocks():
     assert not np.allclose(out[0, 42:], seq[0, 42:])
 
 
+def test_horizontal_flip_twice_is_identity():
+    seq = _seq(12)
+    out = horizontal_flip(horizontal_flip(seq))
+    assert out.shape == seq.shape
+    assert np.allclose(out, seq, atol=1e-6)
+
+
+def test_horizontal_flip_swaps_hand_blocks_and_mirrors_x():
+    # Left-hand block = dims 0:42, right-hand block = dims 42:84; x are even dims,
+    # y are odd. A mirror swaps the blocks together AND negates x.
+    seq = _seq(5)
+    out = horizontal_flip(seq)
+    # The mirrored old left hand (x negated) now occupies the right-hand slot.
+    expected_right = seq[:, :42].copy()
+    expected_right[:, 0::2] = -expected_right[:, 0::2]
+    assert np.allclose(out[:, 42:], expected_right, atol=1e-6)
+    # The mirrored old right hand (x negated) now occupies the left-hand slot.
+    expected_left = seq[:, 42:].copy()
+    expected_left[:, 0::2] = -expected_left[:, 0::2]
+    assert np.allclose(out[:, :42], expected_left, atol=1e-6)
+
+
+def test_horizontal_flip_preserves_absent_hand_blocks():
+    # Absence is an all-zero 21-point block; the flip must not invent a hand.
+    seq = _seq(6)
+    seq[:, :42] = 0.0  # left hand absent on every frame
+    out = horizontal_flip(seq)
+    # Absent left block lands in the right slot, still all-zero.
+    assert np.all(out[:, 42:] == 0.0)
+
+
+def test_augment_flip_prob_zero_never_flips():
+    # flip_prob=0 must be reproducible run-to-run.
+    a = augment(_seq(20), np.random.default_rng(3), flip_prob=0.0)
+    b = augment(_seq(20), np.random.default_rng(3), flip_prob=0.0)
+    assert np.allclose(a, b)
+
+
+def test_augment_flip_prob_gates_the_flip():
+    # augment() always consumes one rng.random() for the flip decision regardless
+    # of flip_prob, so with the SAME seed the ONLY difference between flip_prob=0
+    # and flip_prob=1 is whether horizontal_flip runs before the rest of the
+    # pipeline (downstream rng draws are identical). The two results must differ,
+    # proving the flip is genuinely conditional (not always-on, not always-off).
+    seq = _seq(20)
+    never = augment(seq, np.random.default_rng(42), flip_prob=0.0)
+    always = augment(seq, np.random.default_rng(42), flip_prob=1.0)
+    assert never.shape == always.shape
+    assert not np.allclose(never, always)
+    # flip_prob=1 with the same seed equals flip_prob=0 fed the pre-flipped input,
+    # confirming flip_prob=0 leaves the hand blocks / x-coords unmirrored.
+    pre = augment(horizontal_flip(seq), np.random.default_rng(42), flip_prob=0.0)
+    assert np.allclose(always, pre)
+
+
+def test_augment_deterministic_with_flip_default_on():
+    a = augment(_seq(20), np.random.default_rng(99))
+    b = augment(_seq(20), np.random.default_rng(99))
+    assert a.shape == b.shape
+    assert np.allclose(a, b)
+
+
 def test_add_noise_changes_values_but_close():
     rng = np.random.default_rng(8)
     seq = _seq(10)
@@ -112,7 +175,9 @@ def test_add_noise_changes_values_but_close():
 def test_augment_never_empty_or_nan():
     rng = np.random.default_rng(9)
     for _ in range(50):
-        out = augment(_seq(np.random.default_rng(_).integers(2, 40)), rng)
+        # Draw a genuinely random length from the shared rng each iteration
+        # (not a deterministic length derived from the loop counter).
+        out = augment(_seq(int(rng.integers(2, 40))), rng)
         assert out.shape[0] >= 1
         assert out.shape[1] == 84
         assert np.isfinite(out).all()

@@ -295,3 +295,23 @@ def test_no_auto_miss_when_budget_is_none():
     assert st.event is None
     assert st.score == 0
     assert st.current == "A"   # still on the first prompt; no advance
+
+
+class _RankStub:
+    def strength(self, window, target):
+        return 0.0
+
+    def rank(self, window, k=3):
+        return [{"gloss": "X", "distance": 0.1}]
+
+
+def test_rank_every_populates_topk():
+    # When rank_every is set and the matcher exposes rank(), State.topk fills in
+    # every rank_every frames (and stays None before the first sample).
+    s = Session(
+        _RankStub(), itertools.cycle(["A", "B", "C"]),
+        get_threshold=0.9, confirm_drop=0.8, miss_budget=None,
+        window_size=8, lookahead=2, warmup_frames=0, rank_every=2,
+    )
+    assert s.push(_FRAME, t=0.0).topk is None             # frame 1: not yet
+    assert s.push(_FRAME, t=0.1).topk == [{"gloss": "X", "distance": 0.1}]  # frame 2

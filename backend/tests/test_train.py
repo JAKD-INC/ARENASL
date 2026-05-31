@@ -2,6 +2,7 @@ import os
 
 import numpy as np
 
+from train.dataset import WINDOW_SIZE, SequenceDataset
 from train.model import MotionEncoder
 from train.train import collate, evaluate, export_onnx, train
 
@@ -88,3 +89,48 @@ def test_train_one_epoch_then_export_and_reload_onnx(tmp_path):
     assert tuple(emb.shape) == (1, 128)
     # The exported graph keeps the L2-normalization, so the embedding is unit-norm.
     assert np.isclose(np.linalg.norm(emb), 1.0, atol=1e-4)
+
+
+def _windowed_samples(num_classes=3, per_class=6, T=64, seed=3):
+    """Synthetic cache-shaped samples whose raw sequences are LONGER than the live
+    window length L, so the training path must window them down to <= L frames."""
+    rng = np.random.default_rng(seed)
+    samples = []
+    for c in range(num_classes):
+        for j in range(per_class):
+            seq = np.full((T, 84), float(c), dtype=np.float32)
+            seq += rng.standard_normal((T, 84)).astype(np.float32) * 0.01
+            samples.append({"gloss": f"g{c}", "signer_id": f"s{c}_{j}", "seq": seq})
+    return samples
+
+
+def test_train_windows_are_at_most_L():
+    """The live matcher feeds the encoder a fixed-L sliding window, so the train
+    side must train on windowed samples (via dataset.sample_window): every window
+    yielded by the training dataset is at most L frames long, even though the raw
+    clips are far longer. Some windows are shorter (the warmup-fill phase)."""
+    L = WINDOW_SIZE
+    samples = _windowed_samples(T=L * 4)
+    ds = SequenceDataset(samples, train=True, window=L)
+    lengths = [ds[i][0].shape[0] for i in range(len(ds)) for _ in range(8)]
+    assert lengths, "expected windows to inspect"
+    assert all(1 <= n <= L for n in lengths), (
+        f"training windows must be in [1, {L}]; got {sorted(set(lengths))}"
+    )
+    # The warmup-fill path means at least some windows are strictly shorter than L,
+    # and the fixed-L path means at least one window reaches the full length L.
+    assert any(n < L for n in lengths)
+    assert any(n == L for n in lengths)
+
+
+def test_train_runs_on_windowed_dataset():
+    """End-to-end: train() consumes the windowed SequenceDataset (clips longer than
+    L, sampled down to <=L windows) and returns the metric dict."""
+    L = WINDOW_SIZE
+    samples = _windowed_samples(T=L * 3)
+    train_ds = SequenceDataset(samples, train=True, window=L)
+    val_ds = SequenceDataset(samples, train=False, window=L)
+    model = MotionEncoder(emb_dim=32, num_classes=train_ds.num_classes)
+    model, metrics = train(model, train_ds, val_ds, epochs=2, batch_size=4)
+    assert set(metrics) == {"top1", "top5"}
+    assert 0.0 <= metrics["top1"] <= 1.0

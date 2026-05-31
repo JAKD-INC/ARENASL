@@ -48,3 +48,39 @@ def test_falls_back_to_dtw_matcher_when_no_model_files(tmp_path, monkeypatch):
     mod = _reload_app(tmp_path, monkeypatch)
     assert isinstance(mod._matcher, Matcher)
     assert mod._vocab == ["book", "drink"]
+
+
+def test_dtw_mode_keeps_get_threshold_at_0_5(tmp_path, monkeypatch):
+    # DTW fallback: the cosine-irrelevant 0.5 gate is the right default.
+    mod = _reload_app(tmp_path, monkeypatch)
+    assert mod._embedding is False
+    assert mod.GET_THRESHOLD == 0.5
+
+
+def test_embedding_mode_defaults_get_threshold_to_0_65(tmp_path, monkeypatch):
+    # When the learned matcher is selected, 0.5 is meaningless for 128-d cosine
+    # (random vectors ~0.5), so the gate must default to 0.65. Stub from_files so
+    # no real ONNX/onnxruntime is needed.
+    import importlib
+    from asl.embedding_matcher import EmbeddingMatcher
+
+    encoder = tmp_path / "encoder.onnx"
+    protos = tmp_path / "prototypes.npz"
+    encoder.write_bytes(b"")     # presence is all _build_matcher checks
+    protos.write_bytes(b"")
+    monkeypatch.setenv("ASL_ENCODER", str(encoder))
+    monkeypatch.setenv("ASL_PROTOTYPES", str(protos))
+    monkeypatch.delenv("ASL_GET_THRESHOLD", raising=False)
+
+    stub = EmbeddingMatcher(lambda w: np.array([1.0, 0.0], dtype=np.float32),
+                            {"book": np.array([1.0, 0.0]),
+                             "drink": np.array([0.0, 1.0])})
+    monkeypatch.setattr(EmbeddingMatcher, "from_files",
+                        classmethod(lambda cls, o, p: stub))
+
+    import server.app
+    mod = importlib.reload(server.app)
+    assert mod._embedding is True
+    assert mod._matcher is stub
+    assert mod.GET_THRESHOLD == 0.65
+    assert sorted(mod._vocab) == ["book", "drink"]

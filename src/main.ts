@@ -39,6 +39,7 @@ function renderDebug(
   debug.textContent = [
     `target  : ${s?.current ?? '—'}`,
     `dist    : ${s?.distance != null ? s.distance.toFixed(2) : '—'}`,
+    `top     : ${(s?.topk ?? []).map((e) => `${e.gloss} ${e.distance.toFixed(2)}`).join('  ') || '—'}`,
     `strength: ${str.toFixed(4)} ${bar(str)}`,
     `score   : ${s?.score ?? 0}`,
     `event   : ${s?.event ?? '—'}`,

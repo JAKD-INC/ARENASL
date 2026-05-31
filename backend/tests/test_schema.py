@@ -1,6 +1,12 @@
 import numpy as np
 import pytest
-from asl.schema import assemble_frame, N_KEYPOINTS, POSE_INDICES
+from asl.schema import (
+    assemble_frame,
+    match_features,
+    HAND_XY_COLS,
+    N_KEYPOINTS,
+    POSE_INDICES,
+)
 
 
 def _pose():  # 33 distinct points so we can verify index mapping
@@ -41,3 +47,45 @@ def test_missing_hands_zero_filled():
 def test_missing_pose_raises():
     with pytest.raises(ValueError):
         assemble_frame(None, _hand(1.0), _hand(2.0))
+
+
+def test_match_features_selects_from_full_frame():
+    # Full (T, 147) sequence -> hand-xy (T, 84) by HAND_XY_COLS selection.
+    seq = np.arange(3 * N_KEYPOINTS * 3, dtype=float).reshape(3, N_KEYPOINTS * 3)
+    out = match_features(seq)
+    assert out.shape == (3, len(HAND_XY_COLS))
+    np.testing.assert_array_equal(out, seq[..., HAND_XY_COLS])
+
+
+def test_match_features_idempotent_on_84():
+    # Already-reduced (T, 84) input is returned unchanged (as float).
+    seq = np.arange(5 * len(HAND_XY_COLS), dtype=np.float32).reshape(5, len(HAND_XY_COLS))
+    out = match_features(seq)
+    assert out.shape == seq.shape
+    np.testing.assert_array_equal(out, seq.astype(float))
+    # Double application is a no-op too.
+    np.testing.assert_array_equal(match_features(out), out)
+
+
+def test_match_features_84_float64_returned_unchanged_no_copy():
+    # A float64 (T, 84) input is already hand-xy: returned as the SAME object
+    # (no copy), proving the idempotency guard short-circuits before selection.
+    seq = np.arange(4 * len(HAND_XY_COLS), dtype=np.float64).reshape(4, len(HAND_XY_COLS))
+    out = match_features(seq)
+    assert out is seq
+    np.testing.assert_array_equal(match_features(out), out)
+
+
+def test_match_features_idempotent_across_boundary():
+    # Starting from a full (T, 147) frame, applying match_features twice is a
+    # no-op past the first reduction: 147 -> 84 (select) -> 84 (unchanged).
+    seq = np.arange(3 * N_KEYPOINTS * 3, dtype=float).reshape(3, N_KEYPOINTS * 3)
+    once = match_features(seq)
+    twice = match_features(once)
+    assert once.shape == (3, len(HAND_XY_COLS))
+    np.testing.assert_array_equal(twice, once)
+
+
+def test_match_features_bad_dim_raises():
+    with pytest.raises(ValueError):
+        match_features(np.zeros((2, 50)))

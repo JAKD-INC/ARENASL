@@ -45,6 +45,27 @@ def test_embed_rejects_wrong_rank():
     raise AssertionError("expected ValueError on non-3D input")
 
 
+def test_order_aware_time_reverse_distinct():
+    """A sequence and its time-reverse must embed distinctly (cosine < 0.9).
+
+    Mean-pooling the bi-GRU is order-blind; order-aware pooling (concat of final
+    fwd+bwd hidden states) must distinguish a sign from its reverse. Use a clearly
+    directional (monotonic) sequence so a correct encoder separates the two.
+    """
+    torch.manual_seed(0)
+    m = MotionEncoder(emb_dim=128, num_classes=3)
+    m.eval()
+    T = 16
+    ramp = torch.linspace(-1.0, 1.0, T).unsqueeze(0).unsqueeze(-1)  # (1, T, 1)
+    seq = ramp.expand(1, T, 84).contiguous()
+    rev = torch.flip(seq, dims=[1])
+    with torch.no_grad():
+        emb = m.embed(seq)
+        emb_rev = m.embed(rev)
+    cos = torch.nn.functional.cosine_similarity(emb, emb_rev, dim=1).item()
+    assert cos < 0.9, f"time-reverse embedding too similar (cos={cos:.4f}); pooling is order-blind"
+
+
 def test_onnx_exportable_dynamic_T(tmp_path):
     import onnx
     import onnxruntime as ort

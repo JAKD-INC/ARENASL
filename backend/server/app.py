@@ -22,7 +22,6 @@ PROTOTYPES_PATH = os.environ.get("ASL_PROTOTYPES", "data/prototypes.npz")
 # Watch the HUD's `dist` (raw DTW distance) and set SCALE near a good match's
 # distance so strength = exp(-dist/scale) spans 0..1 instead of pinning at 0.
 SCALE = float(os.environ.get("ASL_SCALE", "10"))
-GET_THRESHOLD = float(os.environ.get("ASL_GET_THRESHOLD", "0.5"))
 CONFIRM_DROP = float(os.environ.get("ASL_CONFIRM_DROP", "0.8"))
 # Frames the sign must stay above threshold to confirm by holding (no dip/move-on
 # needed). ~10 frames ≈ 0.4s. Lower = quicker accept.
@@ -34,21 +33,32 @@ WINDOW_SIZE = int(os.environ.get("ASL_WINDOW_SIZE", "16"))
 # Cascade guard: frames the window must refill after a get before any confirm path
 # fires (the embedding must reflect the NEW sign first). Defaults to one full window.
 WARMUP_FRAMES = int(os.environ.get("ASL_WARMUP", str(WINDOW_SIZE)))
+# How often (frames) the HUD top-k ranking is recomputed. None disables it.
+RANK_EVERY = int(os.environ.get("ASL_RANK_EVERY", "5"))
 
 
 def _build_matcher():
     """Prefer the trained EmbeddingMatcher when its artifacts exist; otherwise fall
-    back to the DTW Matcher over the reference templates. Returns (matcher, vocab)."""
+    back to the DTW Matcher over the reference templates. Returns (matcher, vocab,
+    embedding) where `embedding` is True iff the learned matcher was selected."""
     if os.path.isfile(ENCODER_PATH) and os.path.isfile(PROTOTYPES_PATH):
         matcher = EmbeddingMatcher.from_files(ENCODER_PATH, PROTOTYPES_PATH)
-        return matcher, sorted(matcher._protos)
+        return matcher, sorted(matcher._protos), True
     # Reduce templates to the hands-only xy match features (same as live frames).
     templates = {g: [match_features(t) for t in seqs]
                  for g, seqs in load_templates(TEMPLATES_DIR).items()}
-    return Matcher(templates, scale=SCALE), sorted(templates)
+    return Matcher(templates, scale=SCALE), sorted(templates), False
 
 
-_matcher, _vocab = _build_matcher()
+_matcher, _vocab, _embedding = _build_matcher()
+
+# The cosine gate for the learned matcher lives on a different scale than DTW's
+# strength: 128-d cosine maps to (cos+1)/2 where random vectors sit near 0.5, so a
+# 0.5 gate accepts noise. Default the embedding-mode gate to 0.65; DTW keeps 0.5.
+# ASL_GET_THRESHOLD overrides either explicitly.
+GET_THRESHOLD = float(
+    os.environ.get("ASL_GET_THRESHOLD", "0.65" if _embedding else "0.5")
+)
 
 app = FastAPI()
 
@@ -61,6 +71,7 @@ async def ws(websocket: WebSocket):
         get_threshold=GET_THRESHOLD, confirm_drop=CONFIRM_DROP,
         miss_budget=MISS_BUDGET, window_size=WINDOW_SIZE, lookahead=3,
         confirm_hold=CONFIRM_HOLD, warmup_frames=WARMUP_FRAMES,
+        rank_every=RANK_EVERY,
     )
     try:
         while True:

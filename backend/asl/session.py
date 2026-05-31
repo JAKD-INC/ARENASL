@@ -59,6 +59,9 @@ class Session:
         self._overtake_frames = overtake_frames
         self._confirm_hold = confirm_hold
         self._warmup_frames = warmup_frames
+        self._rank_every = rank_every
+        self._rank_counter = 0
+        self._topk: Optional[list] = None  # last computed debug ranking
 
         self._queue: deque[str] = deque(
             next(prompts) for _ in range(lookahead + 1)
@@ -97,7 +100,7 @@ class Session:
         return State(
             current=q[0], queue=q[1:],
             strength=strength, score=self._score, event=event,
-            confirmed=confirmed, distance=distance,
+            confirmed=confirmed, distance=distance, topk=self._topk,
         )
 
     def push(self, frame: np.ndarray, t: float) -> State:
@@ -113,6 +116,13 @@ class Session:
         # Raw distance for debug/calibration (real Matcher only; stubs omit it).
         distance = (self._matcher.best_distance(window, self._queue[0])
                     if hasattr(self._matcher, "best_distance") else None)
+
+        # Throttled open-set ranking for the HUD (closest glosses overall), so we
+        # can see whether the signed sign actually surfaces near the top.
+        if self._rank_every and hasattr(self._matcher, "rank"):
+            self._rank_counter += 1
+            if self._rank_counter % self._rank_every == 0:
+                self._topk = self._matcher.rank(window, 3)
 
         # Strength of the NEXT target this frame: a fluent signer who never
         # pauses produces no dip on the current sign, but the next sign starts

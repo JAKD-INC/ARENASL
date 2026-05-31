@@ -15,9 +15,24 @@ HAND_XY_COLS = [k * 3 + a for k in range(N_POSE, N_KEYPOINTS) for a in (0, 1)]
 
 
 def match_features(arr: np.ndarray) -> np.ndarray:
-    """Reduce a flattened (..., 49*3) frame/sequence to the hand-xy match
-    columns (..., 84). Applied to both live frames and reference templates."""
-    return np.asarray(arr, dtype=float)[..., HAND_XY_COLS]
+    """Reduce a flattened frame/sequence to the hand-xy match columns (..., 84).
+
+    Idempotent on the feature dimension so callers can apply it freely:
+      - last dim == 84  -> already reduced, returned unchanged (as float).
+      - last dim == 147 -> a full (..., 49*3) frame, HAND_XY_COLS are selected.
+      - anything else   -> ValueError (guards against corrupted upstream input).
+
+    Applied to both live frames and reference templates.
+    """
+    arr = np.asarray(arr)  # preserve input dtype (don't upcast float32 -> float64)
+    last = arr.shape[-1] if arr.ndim else 0
+    if last == len(HAND_XY_COLS):       # 84: already hand-xy
+        return arr
+    if last == N_KEYPOINTS * 3:         # 147: full schema frame
+        return arr[..., HAND_XY_COLS]
+    raise ValueError(
+        f"match_features expected last dim 84 or {N_KEYPOINTS * 3}, got {last}"
+    )
 
 
 def assemble_frame(pose, hand_left, hand_right) -> np.ndarray:

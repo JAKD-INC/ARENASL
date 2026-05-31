@@ -18,6 +18,11 @@ def _protos():
     return {"book": book, "drink": drink}
 
 
+def _l2(v):
+    v = np.asarray(v, dtype=np.float32)
+    return v / np.linalg.norm(v)
+
+
 def test_strength_one_when_embedding_equals_prototype():
     m = EmbeddingMatcher(_fixed_encode([1.0, 0.0, 0.0]), _protos())
     assert m.strength(np.zeros((5, 84), np.float32), "book") == pytest.approx(1.0)
@@ -69,6 +74,64 @@ def test_unknown_target_raises_keyerror():
         m.strength(np.zeros((5, 84), np.float32), "MISSING")
 
 
+def test_multiple_prototypes_strength_picks_best_phase():
+    """A gloss carries several phase prototypes; strength is the MAX over them, so a
+    window matching ANY phase scores high even if it is far from the others."""
+    # Two orthogonal phase prototypes for "book"; the embedding equals phase 2.
+    book = np.stack([_l2([1.0, 0.0, 0.0]), _l2([0.0, 0.0, 1.0])], axis=0)
+    protos = {"book": book, "drink": _l2([0.0, 1.0, 0.0])}
+    m = EmbeddingMatcher(_fixed_encode([0.0, 0.0, 1.0]), protos)
+    # cos to phase1 = 0 -> 0.5, cos to phase2 = 1 -> 1.0; max wins.
+    assert m.strength(np.zeros((5, 84), np.float32), "book") == pytest.approx(1.0)
+    assert m.best_distance(np.zeros((5, 84), np.float32), "book") == pytest.approx(0.0)
+
+
+def test_multiple_prototypes_best_distance_is_min_over_phases():
+    """best_distance = MIN (1 - cos) over the gloss's prototypes (nearest phase)."""
+    # phase1 cos = 0 (dist 1.0), phase2 cos = 0.6 (dist 0.4); min = 0.4.
+    book = np.stack([_l2([0.0, 1.0, 0.0]), _l2([0.6, 0.8, 0.0])], axis=0)
+    m = EmbeddingMatcher(_fixed_encode([1.0, 0.0, 0.0]), {"book": book})
+    assert m.best_distance(np.zeros((5, 84), np.float32), "book") == pytest.approx(0.4)
+    # strength uses the same best phase: (0.6 + 1) / 2 = 0.8.
+    assert m.strength(np.zeros((5, 84), np.float32), "book") == pytest.approx(0.8)
+
+
+def test_rank_uses_best_per_gloss_across_phases():
+    """rank emits one entry per gloss, scored by its nearest prototype, not per row."""
+    # "book" has a far phase and a close phase; its best (close) phase should win
+    # over "drink"'s single moderate prototype.
+    book = np.stack([_l2([0.0, -1.0, 0.0]), _l2([1.0, 0.0, 0.0])], axis=0)
+    drink = _l2([0.7, 0.7, 0.0])
+    m = EmbeddingMatcher(_fixed_encode([1.0, 0.0, 0.0]), {"book": book, "drink": drink})
+    ranked = m.rank(np.zeros((5, 84), np.float32), k=2)
+    assert [r["gloss"] for r in ranked] == ["book", "drink"]
+    assert {r["gloss"] for r in ranked} == {"book", "drink"}  # no duplicate gloss rows
+
+
+def test_one_dim_window_raises_valueerror():
+    """A flat (84,) frame is not a motion window; guard it instead of scoring noise."""
+    m = EmbeddingMatcher(_fixed_encode([1.0, 0.0, 0.0]), _protos())
+    with pytest.raises(ValueError):
+        m.strength(np.zeros(84, np.float32), "book")
+    with pytest.raises(ValueError):
+        m.best_distance(np.zeros(84, np.float32), "book")
+    with pytest.raises(ValueError):
+        m.rank(np.zeros(84, np.float32))
+
+
+def test_three_dim_window_raises_valueerror():
+    """A 3-D (B, T, 84) batch is not a single motion window: it would slip past
+    from_files' batch-wrapping (which only adds a batch axis when ndim == 2) and feed
+    an extra axis to the encoder. The guard must reject it, not just 1-D inputs."""
+    m = EmbeddingMatcher(_fixed_encode([1.0, 0.0, 0.0]), _protos())
+    with pytest.raises(ValueError):
+        m.strength(np.zeros((1, 5, 84), np.float32), "book")
+    with pytest.raises(ValueError):
+        m.best_distance(np.zeros((1, 5, 84), np.float32), "book")
+    with pytest.raises(ValueError):
+        m.rank(np.zeros((1, 5, 84), np.float32))
+
+
 def test_from_files_with_real_onnx(tmp_path):
     """End-to-end: export a real encoder, enroll synthetic clips, then match via
     onnxruntime through from_files."""
@@ -89,9 +152,14 @@ def test_from_files_with_real_onnx(tmp_path):
         return sess.run(None, {name: w})[0].reshape(-1)
 
     rng = np.random.default_rng(0)
-    refs = {g: [rng.standard_normal((8, 84)).astype(np.float32) for _ in range(2)]
+    # Phase 1 DATA FLOOR: enroll() REFUSES a gloss with < 3 usable clips and logs
+    # any below the data floor (8) as under-supported. Provide >= 8 clips/gloss so
+    # every gloss is enrolled cleanly and its prototypes survive into the store.
+    refs = {g: [rng.standard_normal((8, 84)).astype(np.float32) for _ in range(8)]
             for g in ("book", "drink", "eat")}
     protos = enroll(encode, refs)
+    # Guard: enroll must have kept all three glosses (the matcher below indexes them).
+    assert set(protos) == {"book", "drink", "eat"}
     protos_path = str(tmp_path / "protos.npz")
     save_prototypes(protos_path, protos)
 

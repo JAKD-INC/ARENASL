@@ -13,6 +13,7 @@ export interface GameState {
   event: string | null
   confirmed: string | null
   distance?: number | null
+  topk?: { gloss: string; distance: number }[] | null
 }
 
 interface Options {

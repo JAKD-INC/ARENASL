@@ -65,11 +65,42 @@ def temporal_crop(seq: np.ndarray, length: int, rng: np.random.Generator) -> np.
     return seq[start:start + length].astype(np.float32)
 
 
+def horizontal_flip(seq: np.ndarray) -> np.ndarray:
+    """Mirror the sequence left-right (handedness / webcam-mirror parity).
+
+    Frames are in the shoulder-centered, shoulder-width-scaled space produced by
+    features.normalize_frame, so the shoulder midpoint is the origin and a
+    left-right mirror is exactly x -> -x (the x columns are the even dims). A
+    mirror also swaps which hand is which, so the left- and right-hand 21-point
+    blocks (dims 0:42 and 42:84) must be swapped TOGETHER with the x-negation;
+    negating x alone would leave a right hand sitting in the left-hand slot.
+
+    Pure and deterministic (no rng). Applying it twice is the identity.
+    """
+    seq = _as_seq(seq)
+    out = seq.copy()
+    # Negate x (even columns); y (odd columns) is unchanged by a left-right flip.
+    out[:, 0::2] = -out[:, 0::2]
+    # Swap the two 21-point hand blocks so the mirrored left hand lands in the
+    # right-hand slot and vice versa (kept zero-blocks stay zero, so absence is
+    # preserved automatically).
+    half = 84 // 2  # 42 = one hand's 21 points x 2 (x,y)
+    swapped = np.empty_like(out)
+    swapped[:, :half] = out[:, half:]
+    swapped[:, half:] = out[:, :half]
+    return swapped.astype(np.float32)
+
+
 def spatial_jitter(seq: np.ndarray, rng: np.random.Generator,
                    max_shift: float = 0.05, max_scale: float = 0.1,
                    max_rot_deg: float = 10.0) -> np.ndarray:
     """Apply ONE 2D affine (shift+scale+rotation) to all 42 hand points, constant
-    across the whole sequence (different camera framing / hand size / shake)."""
+    across the whole sequence (different camera framing / hand size / shake).
+
+    Coordinate space: the input is shoulder-centered and shoulder-width-scaled
+    (features.normalize_frame), so the origin is the shoulder midpoint and a unit
+    is ~one shoulder width. The shift/scale/rotation are applied about that origin
+    in that space; max_shift is therefore in shoulder-width units."""
     seq = _as_seq(seq)
     T = seq.shape[0]
     pts = seq.reshape(T, N_HAND_POINTS, 2)
@@ -106,11 +137,21 @@ def add_noise(seq: np.ndarray, sigma: float, rng: np.random.Generator) -> np.nda
     return (seq + noise).astype(np.float32)
 
 
-def augment(seq: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+def augment(seq: np.ndarray, rng: np.random.Generator,
+            flip_prob: float = 0.5) -> np.ndarray:
     """Compose a random subset of the augmentations. Each op is applied with ~50%
-    probability so the encoder sees a wide spread of tempos/framings. Guaranteed
-    non-empty and NaN-free."""
+    probability so the encoder sees a wide spread of tempos/framings.
+
+    The horizontal flip (handedness / webcam-mirror parity) is applied with
+    probability `flip_prob` (default 0.5, i.e. enabled ~half the time). Note that
+    horizontal_flip both mirrors x and SWAPS the two 21-point hand blocks (dims
+    0:42 and 42:84) together, so a left-dominant sign becomes its right-dominant
+    mirror; this teaches the encoder which-hand invariance, which is the intended
+    behavior for per-user enrollment / webcam-mirror robustness. Pass flip_prob=0
+    to disable. Guaranteed non-empty and NaN-free."""
     seq = _as_seq(seq)
+    if rng.random() < flip_prob:
+        seq = horizontal_flip(seq)
     if rng.random() < 0.5:
         seq = time_warp(seq, float(rng.uniform(0.5, 2.0)))
     if rng.random() < 0.5:
@@ -125,7 +166,6 @@ def augment(seq: np.ndarray, rng: np.random.Generator) -> np.ndarray:
         seq = add_noise(seq, float(rng.uniform(0.0, 0.02)), rng)
     # Safety: never return empty or NaN.
     if seq.shape[0] == 0:
-        seq = _as_seq(seq).reshape(0, 84)
         seq = np.zeros((1, 84), dtype=np.float32)
     seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
     return seq

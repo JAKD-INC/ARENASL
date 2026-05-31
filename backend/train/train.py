@@ -98,23 +98,25 @@ def export_onnx(model: MotionEncoder, path: str):
 
     wrapper = _EmbedOnly(model)
     example = torch.zeros(1, 8, model.in_dim, dtype=torch.float32)
-    # Force the stable TorchScript exporter (dynamo=False). The installed torch
-    # (2.12) defaults to the dynamo path, which fails to solve the dynamic-T shape
-    # constraints for our bi-GRU; the legacy exporter handles GRU + variable T +
-    # batch_size=1 cleanly. Inference is batch_size=1 (one window per frame in the
-    # live matcher), which is what `embedding`'s dynamic B axis plus the GRU export
-    # path supports here. (On older torch <2.5, dynamo=False is also the default,
-    # so passing it explicitly is a safe no-op there.)
-    torch.onnx.export(
-        wrapper,
-        example,
-        path,
+    # Force the stable TorchScript exporter: it handles our bi-GRU + variable T +
+    # batch_size=1 cleanly. On torch >= 2.5 the export DEFAULT is the dynamo
+    # exporter, which specializes the example's T (8) to a static shape and then
+    # conflicts with the requested dynamic-T axis on a bi-GRU -- so we must pass
+    # `dynamo=False`. That kwarg does not exist on older torch (< 2.5), where the
+    # TorchScript path is already the default, so we only pass it when supported.
+    # Inference is batch_size=1 (one window per frame in the live matcher), which
+    # the dynamic B axis on `embedding` plus the GRU export path supports here.
+    import inspect
+
+    kwargs = dict(
         input_names=["window"],
         output_names=["embedding"],
         dynamic_axes={"window": {1: "T"}, "embedding": {0: "B"}},
         opset_version=17,
-        dynamo=False,
     )
+    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+        kwargs["dynamo"] = False
+    torch.onnx.export(wrapper, example, path, **kwargs)
     return path
 
 
@@ -130,12 +132,17 @@ def _load_cache(cache_path):
 
 
 def main():
-    from train.dataset import SequenceDataset, signer_split
+    from train.dataset import WINDOW_SIZE, SequenceDataset, signer_split
 
     p = argparse.ArgumentParser()
     p.add_argument("--cache", required=True, help=".npz from dataset.build_cache")
     p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--window", type=int, default=64)
+    # Train on the SAME window length the live matcher feeds the encoder (a fixed-L
+    # sliding window, default L=16). SequenceDataset draws fixed-L windows with a
+    # random start (plus some shorter T<L warmup-fill windows on the train side) via
+    # dataset.sample_window, so the encoder never sees a tempo/coverage at train time
+    # it won't see live. Whole ~64-frame clips would be a train/live mismatch.
+    p.add_argument("--window", type=int, default=WINDOW_SIZE)
     p.add_argument("--emb-dim", type=int, default=128)
     p.add_argument("--val-frac", type=float, default=0.2)
     p.add_argument("--onnx", default="data/encoder.onnx")

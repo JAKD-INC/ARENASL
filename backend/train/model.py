@@ -1,9 +1,15 @@
 """Temporal motion encoder for ASL windows.
 
-A small bi-GRU reads a (B, T, 84) sequence of hands-xy features, mean-pools over
-the time axis, projects to a 128-d embedding (L2-normalized), and a linear head
-produces class logits. The embedding is what live and reference windows are
-compared by (cosine); the head is only used to train it.
+A small bi-GRU reads a (B, T, 84) sequence of hands-xy features, takes the
+ORDER-AWARE pooled state (the concatenated final forward+backward hidden states
+of the top GRU layer), projects to a 128-d embedding (L2-normalized), and a
+linear head produces class logits. The embedding is what live and reference
+windows are compared by (cosine); the head is only used to train it.
+
+Order-aware pooling (vs mean over time) matters because signs ARE motion: a sign
+and its time-reverse must not embed alike. The final forward hidden summarizes the
+sequence read left-to-right and the final backward hidden right-to-left, so their
+concatenation encodes temporal direction.
 
 Kept deliberately tiny (~1-2M params) and onnx.export-able with a dynamic T axis
 so it runs at ~ms/window on CPU in the live loop.
@@ -20,29 +26,42 @@ class MotionEncoder(nn.Module):
         self.emb_dim = emb_dim
         self.num_classes = num_classes
         hidden = 128
+        self.hidden = hidden
+        self.num_layers = 2
         # Bidirectional GRU over the time axis. batch_first so x is (B, T, in_dim).
         self.gru = nn.GRU(
             input_size=in_dim,
             hidden_size=hidden,
-            num_layers=2,
+            num_layers=self.num_layers,
             batch_first=True,
             bidirectional=True,
             dropout=0.1,
         )
-        # Mean-pooled bi-GRU output (2*hidden) -> emb_dim, then L2-normalized.
+        # Order-aware pooled state (concat of final fwd+bwd hidden, 2*hidden)
+        # -> emb_dim, then L2-normalized.
         self.proj = nn.Linear(2 * hidden, emb_dim)
         self.classifier = nn.Linear(emb_dim, num_classes)
 
     def embed(self, x: torch.Tensor) -> torch.Tensor:
         """(B, T, in_dim) float32 -> (B, emb_dim) L2-normalized embedding.
 
-        Handles B == 1 and variable T. Mean-pooling over T (not the last hidden
-        state) makes the embedding robust to where in the window a sign falls.
+        Handles B == 1 and variable T. Pooling is ORDER-AWARE: it concatenates the
+        final forward and final backward hidden states of the top GRU layer rather
+        than averaging the per-step outputs over time. This keeps the embedding
+        sensitive to temporal direction (a sign vs its reverse), which mean-pooling
+        is blind to.
         """
         if x.dim() != 3:
             raise ValueError(f"expected (B, T, {self.in_dim}); got shape {tuple(x.shape)}")
-        out, _ = self.gru(x)            # (B, T, 2*hidden)
-        pooled = out.mean(dim=1)        # (B, 2*hidden)
+        # h_n: (num_layers * num_directions, B, hidden). Layers are stacked then
+        # directions interleaved: with num_layers=2 the rows are
+        # [L0-fwd, L0-bwd, L1-fwd, L1-bwd], so the TOP layer's forward/backward hidden
+        # are always the last two slices regardless of num_layers (-2 = top fwd,
+        # -1 = top bwd). Keep this indexing if num_layers changes.
+        _, h_n = self.gru(x)
+        h_fwd = h_n[-2]                 # (B, hidden) top-layer forward final state
+        h_bwd = h_n[-1]                 # (B, hidden) top-layer backward final state
+        pooled = torch.cat([h_fwd, h_bwd], dim=1)  # (B, 2*hidden), order-aware
         emb = self.proj(pooled)         # (B, emb_dim)
         emb = F.normalize(emb, p=2, dim=1)
         return emb

@@ -38,6 +38,13 @@ def test_two_fast_signs_each_score():
         matcher, iter(["HELLO", "BYE", "HELLO", "BYE", "HELLO", "BYE"]),
         get_threshold=0.6, confirm_drop=0.8, miss_budget=10.0,
         window_size=6, lookahead=2,
+        # This fast-signer replay is only 9 frames (3 per sign before each
+        # advance), far short of the production warmup_frames=12 gate that
+        # blocks confirms until enough fresh frames flow in after an advance.
+        # Disable warmup here so the short calibration replay segments cleanly,
+        # mirroring the scripted test_session.py helpers; the warmup behavior is
+        # covered directly in test_session.py.
+        warmup_frames=0,
     )
 
     confirms = []  # (gloss confirmed this frame, score after the get)
