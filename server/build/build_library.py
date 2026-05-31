@@ -10,6 +10,7 @@ import json
 import multiprocessing as mp
 import os
 import shutil
+import sys
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
@@ -93,9 +94,10 @@ def build(glosses, out_dir, clips_dir, per_gloss, workers):
     for start in range(0, total, batch_size):
         batch = tasks[start:start + batch_size]
         try:
-            with ProcessPoolExecutor(
-                max_workers=workers, mp_context=ctx, max_tasks_per_child=10
-            ) as ex:
+            _pool_kw = {"max_workers": workers, "mp_context": ctx}
+            if sys.version_info >= (3, 11):  # max_tasks_per_child is 3.11+ only
+                _pool_kw["max_tasks_per_child"] = 10
+            with ProcessPoolExecutor(**_pool_kw) as ex:
                 futures = {ex.submit(_process_clip, t): t for t in batch}
                 for fut in as_completed(futures):
                     try:

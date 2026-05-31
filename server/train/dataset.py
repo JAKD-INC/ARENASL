@@ -245,6 +245,7 @@ def build_cache(glosses, clip_paths, out_path, per_gloss=None, signer_by_video=N
     import json
     import multiprocessing as mp
     import os
+    import sys
     from concurrent.futures import ProcessPoolExecutor, as_completed
     from concurrent.futures.process import BrokenProcessPool
 
@@ -263,48 +264,76 @@ def build_cache(glosses, clip_paths, out_path, per_gloss=None, signer_by_video=N
             tasks.append((gloss, video_id, path, signer_id))
 
     total = len(tasks)
-    samples = []
+    samples = []          # {gloss, signer_id, seq, video_id}
+    done_ids = set()
 
-    def _collect(r):
+    # RESUME: if an interrupted run left a cache carrying video_ids, keep its samples
+    # and skip those clips so the (expensive) MediaPipe extraction isn't redone.
+    if os.path.exists(out_path):
+        try:
+            prev = np.load(out_path, allow_pickle=True)
+            if "video_ids" in prev:
+                for seq, g, sid, vid in zip(prev["seqs"], prev["glosses"],
+                                            prev["signer_ids"], prev["video_ids"]):
+                    samples.append({"gloss": str(g), "signer_id": str(sid),
+                                    "seq": np.asarray(seq, dtype=np.float32),
+                                    "video_id": str(vid)})
+                    done_ids.add(str(vid))
+                print(f"resuming: {len(done_ids)} clips already extracted, skipping them")
+        except Exception:
+            samples, done_ids = [], set()  # corrupt/legacy cache -> start fresh
+
+    pending = [t for t in tasks if str(t[1]) not in done_ids]
+
+    def _flush():
+        np.savez(
+            out_path,
+            seqs=np.array([s["seq"] for s in samples], dtype=object),
+            glosses=np.array([s["gloss"] for s in samples]),
+            signer_ids=np.array([str(s["signer_id"]) for s in samples]),
+            video_ids=np.array([str(s["video_id"]) for s in samples]),
+            meta=json.dumps({"feature_dim": 84}),
+        )
+
+    def _collect(task, r):
         if r is not None:
             g, sid, seq = r
-            samples.append({"gloss": g, "signer_id": sid, "seq": seq})
+            samples.append({"gloss": g, "signer_id": sid, "seq": seq,
+                            "video_id": str(task[1])})
 
     if not workers or workers <= 1:
-        # Serial / in-process: keeps the in-process extraction monkeypatch working
-        # in unit tests, and is the simple path for small runs.
-        for t in tasks:
-            _collect(_extract_one(t))
+        # Serial / in-process: keeps the in-process extraction monkeypatch working in
+        # unit tests, and is the simple path for small runs.
+        for t in pending:
+            _collect(t, _extract_one(t))
+        _flush()
     else:
-        # Parallel for real (multi-thousand-clip) runs: crash-tolerant batches with
-        # a recycling spawn pool (MediaPipe holds native state that won't fork).
-        print(f"extracting {total} clips with {workers} workers...")
+        # Parallel for real (multi-thousand-clip) runs: crash-tolerant batches with a
+        # recycling spawn pool, CHECKPOINTED after every batch so a crash/Ctrl-C only
+        # loses the current batch (MediaPipe holds native state that won't fork).
+        print(f"extracting {len(pending)} clips ({len(done_ids)} cached) "
+              f"with {workers} workers...")
         ctx = mp.get_context("spawn")
+        pool_kw = {"max_workers": workers, "mp_context": ctx}
+        if sys.version_info >= (3, 11):  # max_tasks_per_child is 3.11+ only
+            pool_kw["max_tasks_per_child"] = 10
         batch = max(workers * 8, 16)
-        for start in range(0, total, batch):
-            chunk = tasks[start:start + batch]
+        for start in range(0, len(pending), batch):
+            chunk = pending[start:start + batch]
             try:
-                with ProcessPoolExecutor(max_workers=workers, mp_context=ctx,
-                                         max_tasks_per_child=10) as ex:
-                    futures = [ex.submit(_extract_one, t) for t in chunk]
-                    for fut in as_completed(futures):
+                with ProcessPoolExecutor(**pool_kw) as ex:
+                    futmap = {ex.submit(_extract_one, t): t for t in chunk}
+                    for fut in as_completed(futmap):
                         try:
-                            _collect(fut.result())
+                            _collect(futmap[fut], fut.result())
                         except Exception:
                             pass
             except BrokenProcessPool:
-                print(f"  ! batch crashed near {start}/{total} (likely OOM — lower "
-                      f"--workers); skipping it")
-            print(f"  [{min(start + batch, total)}/{total}] {len(samples)} usable samples")
-
-    # Store as object arrays of ragged sequences plus parallel label/signer arrays.
-    np.savez(
-        out_path,
-        seqs=np.array([s["seq"] for s in samples], dtype=object),
-        glosses=np.array([s["gloss"] for s in samples]),
-        signer_ids=np.array([str(s["signer_id"]) for s in samples]),
-        meta=json.dumps({"feature_dim": 84}),
-    )
+                print(f"  ! batch crashed near {start}/{len(pending)} (likely OOM — "
+                      f"lower --workers); skipping it")
+            _flush()  # checkpoint -> resumable
+            print(f"  [{min(start + batch, len(pending))}/{len(pending)} new | "
+                  f"{len(samples)}/{total} total] checkpointed -> {out_path}")
     return samples
 
 
