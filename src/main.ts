@@ -1,132 +1,300 @@
 import { startCamera } from './camera.ts'
-import { createDetector, drawLandmarks } from './landmarks.ts'
-import { createConnection, type GameState, type LandmarkMessage } from './net.ts'
-import { createOverlay } from './overlay.ts'
+import { GameStore } from './game/store.ts'
+import { MockDriver } from './game/mockDriver.ts'
+import { SignCapture } from './game/signCapture.ts'
+import { Hud } from './ui/hud.ts'
+import { Vfx } from './ui/vfx.ts'
+import { CaptureUI } from './ui/capture.ts'
+import { ResultsScreen } from './ui/results.ts'
+import { CoachOverlay, type CoachStep } from './ui/coach.ts'
+import { PracticeBar } from './ui/practice.ts'
+import { SoundEngine } from './audio/sound.ts'
+import { MediaPipeLandmarkProvider } from './ui/lenses/landmarkProvider.mediapipe.ts'
+import { createColorFilterRenderer } from './ui/filters/colorFilter.ts'
+import { LensRenderer } from './ui/lenses/lensRenderer.ts'
+import { LookController } from './ui/looks/controller.ts'
+import { Router } from './app/router.ts'
+import { NetMatchDriver } from './game/netMatch.ts'
+import { createNetClient } from './net/wsClient.ts'
+import { MockNetClient } from './net/mockClient.ts'
+import { ensureAuth } from './net/auth.ts'
+import type { OpponentView } from './net/protocol.ts'
+import { TitleScreen } from './ui/screens/title.ts'
+import { NameEntryScreen } from './ui/screens/nameEntry.ts'
+import { ModeSelectScreen } from './ui/screens/modeSelect.ts'
+import { JoinCodeScreen } from './ui/screens/joinCode.ts'
+import { LobbyRoomScreen } from './ui/screens/lobbyRoom.ts'
+import { FindRivalScreen } from './ui/screens/findRival.ts'
+import { WarmupScreen } from './ui/screens/warmup.ts'
 
 const video = document.querySelector<HTMLVideoElement>('#feed')!
 const message = document.querySelector<HTMLDivElement>('#message')!
-const landmarks = document.querySelector<HTMLCanvasElement>('#landmarks')!
-const debug = document.querySelector<HTMLPreElement>('#debug')!
-const clip = document.querySelector<HTMLVideoElement>('#clip')!
-const clipLandmarks = document.querySelector<HTMLCanvasElement>('#clip-landmarks')!
+const filterCanvas = document.querySelector<HTMLCanvasElement>('#filter')!
+const lensCanvas = document.querySelector<HTMLCanvasElement>('#lens')!
+const vfxCanvas = document.querySelector<HTMLCanvasElement>('#vfx')!
+const captureRoot = document.querySelector<HTMLDivElement>('#capture')!
+const hudRoot = document.querySelector<HTMLDivElement>('#hud')!
+const screensRoot = document.querySelector<HTMLDivElement>('#screens')!
+const practiceRoot = document.querySelector<HTMLDivElement>('#practicebar')!
+const coachRoot = document.querySelector<HTMLDivElement>('#coach')!
+const resultsRoot = document.querySelector<HTMLDivElement>('#results')!
+
+const MATCH_ID = 'dev-match'
+const NAME_KEY = 'arenasl.name'
+
+const COACH_STEPS: CoachStep[] = [
+  { title: 'Welcome to ArenaSL 👋', body: 'Learn ASL by signing — let’s warm up. No opponent, no pressure here.' },
+  { target: '.hud-word', title: 'Copy this sign', body: 'Watch the looping demo, then make the same sign with your hands.' },
+  { target: '.cap-stage', title: 'Raise your hands', body: 'Lift your hands into view and hold the sign until the ring fills.' },
+  { title: 'Score big', body: 'A clean sign scores PERFECT and builds your combo. Miss? Just try again — nothing to lose.' },
+  { title: 'Ready to battle?', body: 'Leave Practice and hit Play to face a rival. Your HP stays hidden until the big reveal!' },
+]
 
 function showMessage(text: string): void {
   message.textContent = text
   message.classList.remove('hidden')
 }
 
-// Warm the HTTP cache for upcoming reference clips so prompt changes don't stall.
-const preloaded = new Set<string>()
-function preload(glosses: string[]): void {
-  for (const g of glosses) {
-    if (preloaded.has(g)) continue
-    preloaded.add(g)
-    fetch(`/clips/${g}.mp4`).catch(() => preloaded.delete(g))
-  }
-}
-
-const bar = (v: number) => '█'.repeat(Math.round(v * 10)) + '░'.repeat(10 - Math.round(v * 10))
-const yn = (v: unknown) => (v ? '✓' : '✗')
-
-function renderDebug(
-  state: GameState | null,
-  msg: LandmarkMessage | null,
-  fps: number,
-  rx: number,
-): void {
-  const s = state
-  const str = s?.strength ?? 0
-  debug.textContent = [
-    `target  : ${s?.current ?? '—'}`,
-    `dist    : ${s?.distance != null ? s.distance.toFixed(2) : '—'}`,
-    `top     : ${(s?.topk ?? []).map((e) => `${e.gloss} ${e.distance.toFixed(2)}`).join('  ') || '—'}`,
-    `strength: ${str.toFixed(4)} ${bar(str)}`,
-    `score   : ${s?.score ?? 0}`,
-    `event   : ${s?.event ?? '—'}`,
-    `hands   : L${yn(msg?.handLeft)} R${yn(msg?.handRight)}`,
-    `rx/fps  : ${rx} / ${fps.toFixed(0)}`,
-  ].join('\n')
-}
-
 async function main(): Promise<void> {
+  let stream: MediaStream
   try {
-    video.srcObject = await startCamera()
-    await video.play()
+    stream = await startCamera()
+    video.srcObject = stream
   } catch (error) {
     const name = error instanceof Error ? error.name : ''
-    showMessage(
-      name === 'NotAllowedError' || name === 'SecurityError'
-        ? 'Camera access denied. Please allow camera permission and reload.'
-        : name === 'NotFoundError'
-          ? 'No camera found.'
-          : `Could not start camera${name ? ` (${name})` : ''}.`,
-    )
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      showMessage('Camera access denied. Please allow camera permission and reload.')
+    } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      showMessage('No camera found.')
+    } else {
+      showMessage(`Could not start camera${name ? ` (${name})` : ''}.`)
+    }
     return
   }
 
-  const render = createOverlay({
-    prompts: document.querySelector<HTMLElement>('#prompts')!,
-    clip,
-    ropeMarker: document.querySelector<HTMLElement>('#rope-marker')!,
-    score: document.querySelector<HTMLElement>('#score')!,
+  let displayName = localStorage.getItem(NAME_KEY) ?? ''
+
+  // --- persistent services (live across every screen) ---
+  const store = new GameStore({ seed: 1, myName: displayName || 'You', oppName: 'Rival' })
+  const sound = new SoundEngine()
+  new Hud(hudRoot, store)
+  new Vfx(vfxCanvas, store)
+  mountSoundToggle(sound)
+
+  const landmarks = new MediaPipeLandmarkProvider(video)
+  const colorRenderer = createColorFilterRenderer(filterCanvas, video)
+  colorRenderer?.startLoop()
+  const lensRenderer = new LensRenderer(lensCanvas, video, landmarks)
+  lensRenderer.start()
+  const looks = new LookController(video, colorRenderer, lensRenderer)
+
+  const captureUI = new CaptureUI(captureRoot, sound)
+  const capture = new SignCapture(store, landmarks, captureUI)
+  capture.start() // idles until a match/practice begins
+  captureRoot.classList.add('hidden')
+
+  const driver = new MockDriver(store)
+  let netDriver: NetMatchDriver | null = null
+  const dbg = makeNetDebug()
+  let net = createNetClient()
+  const router = new Router(screensRoot)
+  const coach = new CoachOverlay(coachRoot)
+
+  const practiceBar = new PracticeBar(practiceRoot, {
+    onDone: () => exitPractice(),
+    onHelp: () => runCoach(),
   })
+  const results = new ResultsScreen(resultsRoot, { onHome: () => goTitle(), onRematch: () => goMode() })
 
-  let latest: GameState | null = null
-  let rx = 0 // count of state messages from the server (0 = server dropping frames)
-  const conn = createConnection({
-    onState: (s) => {
-      latest = s
-      rx++
-      render(s)
-      preload(s.queue) // queue = upcoming signs; fetch their clips ahead of time
-    },
-  })
-
-  // Two independent detectors: one for the live feed, one for the demo clip
-  // (separate instances because VIDEO-mode tracking is per-stream/timestamp).
-  const detect = await createDetector()
-  const detectClip = await createDetector()
-
-  const sizeCanvas = () => {
-    landmarks.width = window.innerWidth
-    landmarks.height = window.innerHeight
+  // --- navigation (hoisted; reference the services above) ---
+  function goTitle(): void {
+    router.show(new TitleScreen(displayName || 'You', { onPlay: goMode, onPractice: () => void enterPractice(), onChangeName: goName }))
   }
-  sizeCanvas()
-  window.addEventListener('resize', sizeCanvas)
-
-  let fps = 0
-  let prev = performance.now()
-  let frameN = 0
-  const CLIP_EVERY = 4 // run the demo-clip detector only every Nth frame (perf)
-
-  const loop = () => {
-    const now = performance.now()
-    const dt = (now - prev) / 1000
-    prev = now
-    if (dt > 0) fps = fps * 0.9 + (1 / dt) * 0.1
-    frameN++
-
-    let msg: LandmarkMessage | null = null
-    if (video.readyState >= 2) {
-      msg = detect(video, now / 1000)
-      conn.send(msg)
-      drawLandmarks(landmarks, video, msg) // live vectors over the feed
+  function goName(): void {
+    router.show(
+      new NameEntryScreen(displayName, {
+        onSubmit: (n) => {
+          displayName = n
+          localStorage.setItem(NAME_KEY, n)
+          store.setMyName(n)
+          goTitle()
+        },
+      }),
+    )
+  }
+  function goMode(): void {
+    // Intended leaves are explicit (lobby Leave / find Cancel); don't disconnect here.
+    router.show(new ModeSelectScreen({ onCreate, onJoin: goJoin, onFind, onBack: goTitle }))
+  }
+  function goJoin(): void {
+    router.show(new JoinCodeScreen(net, { onJoined: goLobby, onBack: goMode }))
+  }
+  function onCreate(): void {
+    net.createLobby()
+    goLobby()
+  }
+  function goLobby(): void {
+    router.show(new LobbyRoomScreen(net, looks, { onLeave: () => { net.leaveLobby(); goMode() } }))
+  }
+  function onFind(): void {
+    net.joinQueue()
+    router.show(new FindRivalScreen(net, { onPaired: goLobby, onCancel: () => { net.leaveQueue(); goMode() } }))
+  }
+  function goWarmup(seed: number, opp: OpponentView): void {
+    // VS splash, then begin the duel (server already started it on matchStart).
+    router.show(
+      new WarmupScreen(
+        { name: opp.displayName, elo: opp.elo },
+        { name: displayName || 'You', elo: net.elo ?? undefined },
+        { onDone: () => void startNetMatch(seed, opp) },
+      ),
+    )
+  }
+  async function startNetMatch(seed: number, opp: OpponentView): Promise<void> {
+    router.show(null)
+    await sound.resume()
+    const online = !(net instanceof MockNetClient)
+    store.beginMatch(seed, opp.displayName)
+    await store.runCountdown(online ? 1 : 3)
+    if (online) {
+      // Server owns recognition/HP/words: pause the local heuristic, stream up.
+      capture.pause()
+      netDriver = new NetMatchDriver(store, net, landmarks, captureUI, dbg)
+      netDriver.start(net.playerId ?? -1)
+    } else {
+      capture.resume()
+      driver.start()
     }
+  }
+  async function enterPractice(): Promise<void> {
+    router.show(null)
+    await sound.resume()
+    store.startPractice()
+    runCoach() // the tutorial is the practice — always walk through it
+  }
+  function exitPractice(): void {
+    store.endPractice()
+    goTitle()
+  }
+  function runCoach(): void {
+    coach.start(COACH_STEPS)
+  }
 
-    // Expected vectors from the demo clip — throttled; it's only a reference.
-    if (frameN % CLIP_EVERY === 0 && clip.readyState >= 2 && clip.videoWidth) {
-      if (clipLandmarks.width !== clip.clientWidth || clipLandmarks.height !== clip.clientHeight) {
-        clipLandmarks.width = clip.clientWidth
-        clipLandmarks.height = clip.clientHeight
+  // --- match start handshake (mock or real, same events) ---
+  // Re-attachable because `net` can fall back to the mock client if the backend
+  // is unreachable at boot.
+  const DEFAULT_OPP: OpponentView = { playerId: 2, displayName: 'Rival', elo: 1000 }
+  let pendingOpponent: OpponentView | null = null
+  let unsubMatch: (() => void) | null = null
+  function subscribeMatchEvents(): void {
+    unsubMatch?.()
+    unsubMatch = net.on((e) => {
+      if (e.type === 'matchFound') {
+        // The lobby just filled — note the opponent but STAY in the lobby room so
+        // both players can ready up. The duel only begins on matchStart.
+        pendingOpponent = e.opponent
+      } else if (e.type === 'matchStart') {
+        goWarmup(e.wordSeed, pendingOpponent ?? DEFAULT_OPP)
+      } else if (e.type === 'error') {
+        console.error('[arena] server error:', e.code, e.message)
       }
-      const expected = detectClip(clip, now / 1000)
-      drawLandmarks(clipLandmarks, clip, expected, { fit: 'fill', mirror: false })
-    }
-
-    renderDebug(latest, msg, fps, rx)
-    requestAnimationFrame(loop)
+    })
   }
-  requestAnimationFrame(loop)
+
+  /**
+   * Authenticate (per-device account → JWT) and connect to the backend. If the
+   * backend is unreachable, fall back to the offline mock so Practice and a
+   * standalone demo still work.
+   */
+  async function connectNet(name: string): Promise<void> {
+    if (!(net instanceof MockNetClient)) {
+      try {
+        const id = await ensureAuth(name)
+        store.setMyName(id.displayName)
+        await net.connect(id.displayName, id.token)
+        subscribeMatchEvents()
+        return
+      } catch (err) {
+        console.warn('Backend unavailable — running offline (mock):', err)
+        net = new MockNetClient()
+      }
+    }
+    await net.connect(name)
+    subscribeMatchEvents()
+  }
+
+  // --- audio + capture/practice visibility follow the phase machine ---
+  let prevCountdown = -1
+  store.on('change', (s) => {
+    if (s.phase === 'countdown' && s.countdown !== prevCountdown && s.countdown > 0) sound.countdown(s.countdown)
+    prevCountdown = s.countdown
+  })
+  store.on('phase', (phase) => {
+    captureRoot.classList.toggle('hidden', phase !== 'racing' && phase !== 'practice')
+    practiceBar.setVisible(phase === 'practice')
+    if (phase === 'racing') {
+      sound.go()
+      sound.startMusic()
+    }
+  })
+  store.on('finished', () => {
+    driver.stop()
+    netDriver?.stop()
+    netDriver = null
+    capture.resume() // back to local capture for practice/offline
+    sound.stopHold()
+    sound.stopMusic()
+    store.getState().winner === 'me' ? sound.win() : sound.lose()
+    void results.show(store, MATCH_ID)
+  })
+
+  // --- boot: name (first run) → auth + connect → title ---
+  landmarks.start().catch((err) => console.warn('Landmark provider unavailable:', err))
+  if (!displayName) {
+    router.show(
+      new NameEntryScreen('', {
+        onSubmit: async (n) => {
+          displayName = n
+          localStorage.setItem(NAME_KEY, n)
+          await connectNet(n)
+          goTitle()
+        },
+      }),
+    )
+  } else {
+    await connectNet(displayName)
+    goTitle()
+  }
 }
 
-main()
+/** Opt-in (`?debug=1`) on-screen readout of the live recognition/match state. */
+function makeNetDebug(): ((line: string) => void) | undefined {
+  if (new URLSearchParams(location.search).get('debug') !== '1') return undefined
+  const el = document.createElement('div')
+  el.className = 'net-debug'
+  document.body.append(el)
+  return (line: string) => {
+    el.textContent = line
+  }
+}
+
+/** Small persistent sound on/off toggle in the corner. */
+function mountSoundToggle(sound: SoundEngine): void {
+  const btn = document.createElement('button')
+  btn.className = 'sound-toggle'
+  btn.type = 'button'
+  btn.setAttribute('aria-label', 'Toggle sound')
+  const render = (): void => {
+    btn.textContent = sound.isEnabled() ? '🔊' : '🔇'
+  }
+  render()
+  btn.addEventListener('click', () => {
+    const on = !sound.isEnabled()
+    sound.setEnabled(on)
+    if (on) void sound.resume()
+    render()
+  })
+  document.body.append(btn)
+}
+
+void main()
