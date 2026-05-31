@@ -12,6 +12,7 @@ export interface GameState {
   score: number
   event: string | null
   confirmed: string | null
+  distance?: number | null
 }
 
 interface Options {

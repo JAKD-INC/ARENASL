@@ -10,11 +10,15 @@ from server.prompts import prompt_stream
 TEMPLATES_DIR = os.environ.get("ASL_TEMPLATES_DIR", "data/templates")
 
 # Calibration inherited from Plan 1's settled values (tune against real data).
-SCALE = 0.5
-GET_THRESHOLD = 0.6
-CONFIRM_DROP = 0.8
+# Calibration is env-tunable so you can dial it in live (restart, no rebuild):
+#   ASL_SCALE=6 ASL_GET_THRESHOLD=0.5 docker compose up -d --force-recreate app
+# Watch the HUD's `dist` (raw DTW distance) and set SCALE near a good match's
+# distance so strength = exp(-dist/scale) spans 0..1 instead of pinning at 0.
+SCALE = float(os.environ.get("ASL_SCALE", "0.5"))
+GET_THRESHOLD = float(os.environ.get("ASL_GET_THRESHOLD", "0.6"))
+CONFIRM_DROP = float(os.environ.get("ASL_CONFIRM_DROP", "0.8"))
 MISS_BUDGET = None  # no auto-miss/timer — advance only on a correct sign
-WINDOW_SIZE = 48  # ~1.5-2s of frames at 25-30fps
+WINDOW_SIZE = int(os.environ.get("ASL_WINDOW_SIZE", "48"))  # ~1.5-2s at 25-30fps
 
 _templates = load_templates(TEMPLATES_DIR)
 _matcher = Matcher(_templates, scale=SCALE)

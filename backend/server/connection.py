@@ -12,6 +12,7 @@ def state_to_dict(state: State) -> dict:
         "score": state.score,
         "event": state.event,
         "confirmed": state.confirmed,
+        "distance": state.distance,
     }
 
 

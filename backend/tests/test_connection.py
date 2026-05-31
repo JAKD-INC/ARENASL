@@ -42,4 +42,4 @@ def test_state_to_dict_round_trips_fields():
                score=40, event=None, confirmed=None)
     d = state_to_dict(st)
     assert d == {"current": "go", "queue": ["eat", "water"], "strength": 0.9,
-                 "score": 40, "event": None, "confirmed": None}
+                 "score": 40, "event": None, "confirmed": None, "distance": None}

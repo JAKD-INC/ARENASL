@@ -17,6 +17,7 @@ class State:
     score: int              # running score
     event: Optional[str]    # "get", "miss", or None this frame
     confirmed: Optional[str]  # gloss confirmed THIS frame (on "get"), else None
+    distance: Optional[float] = None  # raw best DTW distance (debug/calibration)
 
 
 class Session:
@@ -75,12 +76,13 @@ class Session:
         strength: float = 0.0,
         event: Optional[str] = None,
         confirmed: Optional[str] = None,
+        distance: Optional[float] = None,
     ) -> State:
         q = list(self._queue)
         return State(
             current=q[0], queue=q[1:],
             strength=strength, score=self._score, event=event,
-            confirmed=confirmed,
+            confirmed=confirmed, distance=distance,
         )
 
     def push(self, frame: np.ndarray, t: float) -> State:
@@ -92,6 +94,9 @@ class Session:
         window = np.array(self._buffer)
         strength = self._matcher.strength(window, self._queue[0])
         self._peak = max(self._peak, strength)
+        # Raw distance for debug/calibration (real Matcher only; stubs omit it).
+        distance = (self._matcher.best_distance(window, self._queue[0])
+                    if hasattr(self._matcher, "best_distance") else None)
 
         # Strength of the NEXT target this frame: a fluent signer who never
         # pauses produces no dip on the current sign, but the next sign starts
@@ -119,13 +124,14 @@ class Session:
             gloss = self._queue[0]
             self._score += self._get_points
             self._advance()
-            return self.state(strength=strength, event="get", confirmed=gloss)
+            return self.state(strength=strength, event="get", confirmed=gloss,
+                              distance=distance)
 
         # Timed auto-miss is opt-in: miss_budget=None disables it entirely, so a
         # prompt only advances when the sign is actually performed (no time limit).
         if self._miss_budget is not None and t - self._target_start >= self._miss_budget:
             self._score += self._miss_points
             self._advance()
-            return self.state(strength=strength, event="miss")
+            return self.state(strength=strength, event="miss", distance=distance)
 
-        return self.state(strength=strength, event=None)
+        return self.state(strength=strength, event=None, distance=distance)

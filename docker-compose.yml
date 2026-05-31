@@ -43,9 +43,15 @@ services:
       - asl-data:/data
     # First-run auto-build vocab (optional): ASL_BUILD_GLOSSES="book drink help"
     # ASL_BUILD_PER_GLOSS=4 docker compose up app
+    # Recognition calibration (optional): ASL_SCALE, ASL_GET_THRESHOLD,
+    # ASL_CONFIRM_DROP, ASL_WINDOW_SIZE — tune live via the HUD's dist readout.
     environment:
       - ASL_BUILD_GLOSSES
       - ASL_BUILD_PER_GLOSS
+      - ASL_SCALE
+      - ASL_GET_THRESHOLD
+      - ASL_CONFIRM_DROP
+      - ASL_WINDOW_SIZE
     restart: unless-stopped
 
 volumes:

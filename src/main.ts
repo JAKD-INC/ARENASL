@@ -38,6 +38,7 @@ function renderDebug(
   const str = s?.strength ?? 0
   debug.textContent = [
     `target  : ${s?.current ?? '—'}`,
+    `dist    : ${s?.distance != null ? s.distance.toFixed(2) : '—'}`,
     `strength: ${str.toFixed(4)} ${bar(str)}`,
     `score   : ${s?.score ?? 0}`,
     `event   : ${s?.event ?? '—'}`,

@@ -22,8 +22,11 @@ class Matcher:
         self._templates = templates
         self._scale = scale
 
+    def best_distance(self, window: np.ndarray, target: str) -> float:
+        """Smallest DTW distance from `window` to any exemplar of `target`."""
+        exemplars = self._templates[target]  # KeyError if unknown target
+        return min(dtw_distance(window, t) for t in exemplars)
+
     def strength(self, window: np.ndarray, target: str) -> float:
         """Return match strength in [0, 1] of `window` against `target`."""
-        exemplars = self._templates[target]  # KeyError if unknown target
-        best = min(dtw_distance(window, t) for t in exemplars)
-        return math.exp(-best / self._scale)
+        return math.exp(-self.best_distance(window, target) / self._scale)
