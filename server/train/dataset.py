@@ -208,25 +208,50 @@ def _signer_id_by_video(cache_dir=None) -> dict:
     return out
 
 
-def build_cache(glosses, clip_paths, out_path, per_gloss=None, signer_by_video=None):
+def _extract_one(args):
+    """Worker: extract one clip -> (gloss, signer_id, (T,84) seq) or None. Runs in
+    its own process with its own MediaPipe instance (spawn-safe; imports lazily)."""
+    gloss, video_id, path, signer_id = args
+    try:
+        from asl.features import normalize_frame
+        from build.extract import extract_frames
+
+        normed = []
+        for f in extract_frames(path):
+            try:
+                normed.append(normalize_frame(f).flatten())
+            except ValueError:
+                continue
+        if len(normed) < 2:
+            return None
+        seq = match_features(np.array(normed, dtype=np.float32)).astype(np.float32)
+        return (gloss, str(signer_id), seq)
+    except Exception:  # a bad clip must not sink the whole build
+        return None
+
+
+def build_cache(glosses, clip_paths, out_path, per_gloss=None, signer_by_video=None,
+                workers=None):
     """Extract (T, 84) samples from WLASL clips and write them to an .npz.
 
     `clip_paths` maps gloss -> list of (video_id, video_path). The real signer_id
     is recovered by joining dxli94's WLASL_v0.3.json on video_id (fetched once via
     `_signer_id_by_video`, or passed in as `signer_by_video` for reuse/testing); a
     video with no match falls back to its own video_id as a unique signer so it is
-    never silently merged with another signer. Uses build.extract.extract_frames +
-    features.normalize_frame + match_features so training/enroll/live all share
-    identical features. NOT run in unit tests.
+    never silently merged with another signer. Extraction is parallelized across
+    `workers` processes (default min(cpu,8)) in crash-tolerant batches so a full
+    ~2000-gloss build survives OOMs/bad clips. NOT run in unit tests.
     """
     import json
-    from asl.features import normalize_frame
-    from build.extract import extract_frames
+    import multiprocessing as mp
+    import os
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    from concurrent.futures.process import BrokenProcessPool
 
     if signer_by_video is None:
         signer_by_video = _signer_id_by_video()
 
-    samples = []
+    tasks = []
     for gloss in glosses:
         entries = clip_paths.get(gloss, [])
         if per_gloss is not None:
@@ -235,17 +260,42 @@ def build_cache(glosses, clip_paths, out_path, per_gloss=None, signer_by_video=N
             # Join on video id; fall back to the (unique) video id itself so an
             # unmatched clip is its own signer rather than collapsing into one bucket.
             signer_id = signer_by_video.get(str(video_id), f"vid:{video_id}")
-            frames = extract_frames(path)
-            normed = []
-            for f in frames:
-                try:
-                    normed.append(normalize_frame(f).flatten())
-                except ValueError:
-                    continue
-            if len(normed) < 2:
-                continue
-            seq = match_features(np.array(normed, dtype=np.float32)).astype(np.float32)
-            samples.append({"gloss": gloss, "signer_id": signer_id, "seq": seq})
+            tasks.append((gloss, video_id, path, signer_id))
+
+    total = len(tasks)
+    samples = []
+
+    def _collect(r):
+        if r is not None:
+            g, sid, seq = r
+            samples.append({"gloss": g, "signer_id": sid, "seq": seq})
+
+    if not workers or workers <= 1:
+        # Serial / in-process: keeps the in-process extraction monkeypatch working
+        # in unit tests, and is the simple path for small runs.
+        for t in tasks:
+            _collect(_extract_one(t))
+    else:
+        # Parallel for real (multi-thousand-clip) runs: crash-tolerant batches with
+        # a recycling spawn pool (MediaPipe holds native state that won't fork).
+        print(f"extracting {total} clips with {workers} workers...")
+        ctx = mp.get_context("spawn")
+        batch = max(workers * 8, 16)
+        for start in range(0, total, batch):
+            chunk = tasks[start:start + batch]
+            try:
+                with ProcessPoolExecutor(max_workers=workers, mp_context=ctx,
+                                         max_tasks_per_child=10) as ex:
+                    futures = [ex.submit(_extract_one, t) for t in chunk]
+                    for fut in as_completed(futures):
+                        try:
+                            _collect(fut.result())
+                        except Exception:
+                            pass
+            except BrokenProcessPool:
+                print(f"  ! batch crashed near {start}/{total} (likely OOM — lower "
+                      f"--workers); skipping it")
+            print(f"  [{min(start + batch, total)}/{total}] {len(samples)} usable samples")
 
     # Store as object arrays of ragged sequences plus parallel label/signer arrays.
     np.savez(
@@ -258,7 +308,7 @@ def build_cache(glosses, clip_paths, out_path, per_gloss=None, signer_by_video=N
     return samples
 
 
-def build_library_cache(glosses, out_path, per_gloss=8):
+def build_library_cache(glosses, out_path, per_gloss=8, workers=None):
     """Glue from build.build_library's gloss catalogue to build_cache.
 
     build_library knows how to enumerate WLASL clips (Voxel51/WLASL samples.json:
@@ -296,7 +346,7 @@ def build_library_cache(glosses, out_path, per_gloss=8):
             entries.append((Path(fp).stem, clip))
         clip_paths[gloss] = entries
 
-    return build_cache(glosses, clip_paths, out_path, per_gloss=per_gloss)
+    return build_cache(glosses, clip_paths, out_path, per_gloss=per_gloss, workers=workers)
 
 
 if __name__ == "__main__":
@@ -310,5 +360,9 @@ if __name__ == "__main__":
     g.add_argument("--all", action="store_true", help="every gloss in the dataset")
     p.add_argument("--out", default="data/cache.npz")
     p.add_argument("--per-gloss", type=int, default=8)
+    import os as _os
+    p.add_argument("--workers", type=int, default=min(_os.cpu_count() or 4, 8),
+                   help="parallel extraction workers (default min(cpu,8); ~0.5-1GB each)")
     a = p.parse_args()
-    build_library_cache(None if a.all else a.glosses, a.out, per_gloss=a.per_gloss)
+    build_library_cache(None if a.all else a.glosses, a.out,
+                        per_gloss=a.per_gloss, workers=a.workers)
