@@ -13,7 +13,16 @@ import { MediaPipeLandmarkProvider } from './ui/lenses/landmarkProvider.mediapip
 import { createColorFilterRenderer } from './ui/filters/colorFilter.ts'
 import { LensRenderer } from './ui/lenses/lensRenderer.ts'
 import { LookController } from './ui/looks/controller.ts'
-import { LookPicker } from './ui/looks/picker.ts'
+import { Router } from './app/router.ts'
+import { createNetClient } from './net/wsClient.ts'
+import type { OpponentView } from './net/protocol.ts'
+import { TitleScreen } from './ui/screens/title.ts'
+import { NameEntryScreen } from './ui/screens/nameEntry.ts'
+import { ModeSelectScreen } from './ui/screens/modeSelect.ts'
+import { JoinCodeScreen } from './ui/screens/joinCode.ts'
+import { LobbyRoomScreen } from './ui/screens/lobbyRoom.ts'
+import { FindRivalScreen } from './ui/screens/findRival.ts'
+import { WarmupScreen } from './ui/screens/warmup.ts'
 
 const video = document.querySelector<HTMLVideoElement>('#feed')!
 const message = document.querySelector<HTMLDivElement>('#message')!
@@ -22,22 +31,20 @@ const lensCanvas = document.querySelector<HTMLCanvasElement>('#lens')!
 const vfxCanvas = document.querySelector<HTMLCanvasElement>('#vfx')!
 const captureRoot = document.querySelector<HTMLDivElement>('#capture')!
 const hudRoot = document.querySelector<HTMLDivElement>('#hud')!
-const pickerRoot = document.querySelector<HTMLDivElement>('#picker')!
+const screensRoot = document.querySelector<HTMLDivElement>('#screens')!
 const practiceRoot = document.querySelector<HTMLDivElement>('#practicebar')!
 const coachRoot = document.querySelector<HTMLDivElement>('#coach')!
 const resultsRoot = document.querySelector<HTMLDivElement>('#results')!
 
 const MATCH_ID = 'dev-match'
-const COACH_KEY = 'arenasl.coachSeen'
+const NAME_KEY = 'arenasl.name'
 
-/** First-run tutorial steps for Practice mode. */
 const COACH_STEPS: CoachStep[] = [
   { title: 'Welcome to ArenaSL 👋', body: 'Learn ASL by signing — let’s warm up. No opponent, no pressure here.' },
   { target: '.hud-word', title: 'Copy this sign', body: 'Watch the looping demo, then make the same sign with your hands.' },
   { target: '.cap-stage', title: 'Raise your hands', body: 'Lift your hands into view and hold the sign until the ring fills.' },
   { title: 'Score big', body: 'A clean sign scores PERFECT and builds your combo. Miss? Just try again — nothing to lose.' },
-  { target: '[data-looks]', title: 'Make it yours', body: 'Tap Looks any time to add face lenses and color filters to your camera.' },
-  { title: 'Ready to battle?', body: 'Hit “Start match” to race a rival. Your HP stays hidden until the big reveal at the end!' },
+  { title: 'Ready to battle?', body: 'Leave Practice and hit Play to face a rival. Your HP stays hidden until the big reveal!' },
 ]
 
 function showMessage(text: string): void {
@@ -52,30 +59,25 @@ async function main(): Promise<void> {
     video.srcObject = stream
   } catch (error) {
     const name = error instanceof Error ? error.name : ''
-    switch (name) {
-      case 'NotAllowedError':
-      case 'SecurityError':
-        showMessage('Camera access denied. Please allow camera permission and reload.')
-        break
-      case 'NotFoundError':
-      case 'DevicesNotFoundError':
-        showMessage('No camera found.')
-        break
-      default:
-        showMessage(`Could not start camera${name ? ` (${name})` : ''}.`)
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      showMessage('Camera access denied. Please allow camera permission and reload.')
+    } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      showMessage('No camera found.')
+    } else {
+      showMessage(`Could not start camera${name ? ` (${name})` : ''}.`)
     }
     return
   }
 
-  // --- game + overlay layers ---
-  const store = new GameStore({ seed: 1, myName: 'You', oppName: 'Rival' })
+  let displayName = localStorage.getItem(NAME_KEY) ?? ''
+
+  // --- persistent services (live across every screen) ---
+  const store = new GameStore({ seed: 1, myName: displayName || 'You', oppName: 'Rival' })
   const sound = new SoundEngine()
   new Hud(hudRoot, store)
   new Vfx(vfxCanvas, store)
-  const results = new ResultsScreen(resultsRoot)
   mountSoundToggle(sound)
 
-  // --- camera looks: face lenses + color filters (need landmarks) ---
   const landmarks = new MediaPipeLandmarkProvider(video)
   const colorRenderer = createColorFilterRenderer(filterCanvas, video)
   colorRenderer?.startLoop()
@@ -83,44 +85,103 @@ async function main(): Promise<void> {
   lensRenderer.start()
   const looks = new LookController(video, colorRenderer, lensRenderer)
 
-  // --- the live loop: the player signs for real, the opponent is mocked ---
   const captureUI = new CaptureUI(captureRoot, sound)
   const capture = new SignCapture(store, landmarks, captureUI)
-  capture.start() // idles until the race actually begins
+  capture.start() // idles until a match/practice begins
   captureRoot.classList.add('hidden')
 
   const driver = new MockDriver(store)
-
-  // --- solo Practice room + first-run tutorial ---
+  const net = createNetClient()
+  const router = new Router(screensRoot)
   const coach = new CoachOverlay(coachRoot)
-  const runCoach = (): void => coach.start(COACH_STEPS, () => localStorage.setItem(COACH_KEY, '1'))
 
-  const startPractice = async (): Promise<void> => {
-    await sound.resume()
-    picker.hide()
-    store.startPractice()
-    if (!localStorage.getItem(COACH_KEY)) runCoach()
-  }
-  const toLobby = (): void => {
-    store.endPractice()
-    picker.show()
-  }
   const practiceBar = new PracticeBar(practiceRoot, {
-    onDone: toLobby,
-    onLooks: () => picker.toggle(),
-    onHelp: runCoach,
+    onDone: () => exitPractice(),
+    onHelp: () => runCoach(),
+  })
+  const results = new ResultsScreen(resultsRoot, { onHome: () => goTitle(), onRematch: () => goMode() })
+
+  // --- navigation (hoisted; reference the services above) ---
+  function goTitle(): void {
+    router.show(new TitleScreen(displayName || 'You', { onPlay: goMode, onPractice: () => void enterPractice(), onChangeName: goName }))
+  }
+  function goName(): void {
+    router.show(
+      new NameEntryScreen(displayName, {
+        onSubmit: (n) => {
+          displayName = n
+          localStorage.setItem(NAME_KEY, n)
+          store.setMyName(n)
+          void net.connect(n) // mock: re-stamps identity; real: reconnect
+          goTitle()
+        },
+      }),
+    )
+  }
+  function goMode(): void {
+    // Intended leaves are explicit (lobby Leave / find Cancel); don't disconnect here.
+    router.show(new ModeSelectScreen({ onCreate, onJoin: goJoin, onFind, onBack: goTitle }))
+  }
+  function goJoin(): void {
+    router.show(new JoinCodeScreen(net, { onJoined: goLobby, onBack: goMode }))
+  }
+  function onCreate(): void {
+    net.createLobby()
+    goLobby()
+  }
+  function goLobby(): void {
+    router.show(new LobbyRoomScreen(net, looks, { onLeave: () => { net.leaveLobby(); goMode() } }))
+  }
+  function onFind(): void {
+    net.joinQueue()
+    router.show(new FindRivalScreen(net, { onPaired: goLobby, onCancel: () => { net.leaveQueue(); goMode() } }))
+  }
+  function goWarmup(seed: number, opp: OpponentView): void {
+    router.show(
+      new WarmupScreen(
+        { name: opp.displayName, elo: opp.elo },
+        { name: displayName || 'You', elo: net.elo ?? undefined },
+        { onDone: () => void startNetMatch(seed, opp) },
+      ),
+    )
+  }
+  async function startNetMatch(seed: number, opp: OpponentView): Promise<void> {
+    router.show(null)
+    await sound.resume()
+    store.beginMatch(seed, opp.displayName)
+    await store.runCountdown(3)
+    driver.start()
+  }
+  async function enterPractice(): Promise<void> {
+    router.show(null)
+    await sound.resume()
+    store.startPractice()
+    runCoach() // the tutorial is the practice — always walk through it
+  }
+  function exitPractice(): void {
+    store.endPractice()
+    goTitle()
+  }
+  function runCoach(): void {
+    coach.start(COACH_STEPS)
+  }
+
+  // --- match start handshake (mock or real, same events) ---
+  let pendingOpponent: OpponentView | null = null
+  net.on((e) => {
+    if (e.type === 'matchFound') pendingOpponent = e.opponent
+    else if (e.type === 'warmupStart') {
+      goWarmup(e.wordSeed, pendingOpponent ?? { playerId: 2, displayName: 'Rival', elo: 1000 })
+    }
   })
 
-  // Match-level audio + capture/practice visibility follow the phase machine.
+  // --- audio + capture/practice visibility follow the phase machine ---
   let prevCountdown = -1
   store.on('change', (s) => {
-    if (s.phase === 'countdown' && s.countdown !== prevCountdown && s.countdown > 0) {
-      sound.countdown(s.countdown)
-    }
+    if (s.phase === 'countdown' && s.countdown !== prevCountdown && s.countdown > 0) sound.countdown(s.countdown)
     prevCountdown = s.countdown
   })
   store.on('phase', (phase) => {
-    // The capture loop + feedback run in both a match and Practice.
     captureRoot.classList.toggle('hidden', phase !== 'racing' && phase !== 'practice')
     practiceBar.setVisible(phase === 'practice')
     if (phase === 'racing') {
@@ -130,28 +191,31 @@ async function main(): Promise<void> {
   })
   store.on('finished', () => {
     driver.stop()
-    sound.stopHold() // belt-and-suspenders: never let the hold tone leak
+    sound.stopHold()
     sound.stopMusic()
     store.getState().winner === 'me' ? sound.win() : sound.lose()
     void results.show(store, MATCH_ID)
   })
 
-  const startMatch = async (): Promise<void> => {
-    await sound.resume() // the Start click is our audio-unlock gesture
-    picker.hide()
-    store.beginMatch() // fresh session so practice never leaks into the match
-    await store.runCountdown(3)
-    driver.start()
-  }
-
-  const picker = new LookPicker(pickerRoot, looks, {
-    onStart: () => void startMatch(),
-    onPractice: () => void startPractice(),
-  })
-
-  // MediaPipe models load from CDN; if they fail (offline), lenses won't anchor
-  // and hand capture won't fire — color filters and the rest still work.
+  // --- boot: name (first run) → connect → title ---
   landmarks.start().catch((err) => console.warn('Landmark provider unavailable:', err))
+  if (!displayName) {
+    router.show(
+      new NameEntryScreen('', {
+        onSubmit: async (n) => {
+          displayName = n
+          localStorage.setItem(NAME_KEY, n)
+          store.setMyName(n)
+          await net.connect(n)
+          goTitle()
+        },
+      }),
+    )
+  } else {
+    store.setMyName(displayName)
+    await net.connect(displayName)
+    goTitle()
+  }
 }
 
 /** Small persistent sound on/off toggle in the corner. */

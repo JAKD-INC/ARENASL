@@ -11,12 +11,19 @@ import { MAX_HP } from '../game/scoring.ts'
  * recaps it: fetch the opponent replay video, then replay the recorded
  * tug-of-war onto the HP bar + breakdown, and show final scores + the winner.
  */
+export interface ResultsNav {
+  onHome: () => void
+  onRematch: () => void
+}
+
 export class ResultsScreen {
   private root: HTMLElement
+  private nav: ResultsNav
   private updateBreakdown: (() => void) | null = null
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, nav: ResultsNav) {
     this.root = root
+    this.nav = nav
     this.root.classList.add('results', 'hidden')
   }
 
@@ -86,8 +93,14 @@ export class ResultsScreen {
       </div>
     `
 
-    this.root.querySelector('[data-home]')?.addEventListener('click', () => location.reload())
-    this.root.querySelector('[data-again]')?.addEventListener('click', () => location.reload())
+    this.root.querySelector('[data-home]')?.addEventListener('click', () => {
+      this.hide()
+      this.nav.onHome()
+    })
+    this.root.querySelector('[data-again]')?.addEventListener('click', () => {
+      this.hide()
+      this.nav.onRematch()
+    })
 
     this.mountReplay(replay.videoUrl)
     this.setupBreakdownScroll()

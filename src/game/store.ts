@@ -121,10 +121,11 @@ export class GameStore {
    * Reset to a fresh **match** session so mode-switching (lobby ⇄ practice ⇄
    * match) never carries words/score over. Call before {@link runCountdown}.
    */
-  beginMatch(): void {
+  beginMatch(seed: number = this.seed, opponentName: string = this.oppName): void {
     this.practiceStream = null
-    this.stream = new WordStream(this.seed)
-    this.oppStream = new WordStream(this.seed)
+    this.oppName = opponentName
+    this.stream = new WordStream(seed)
+    this.oppStream = new WordStream(seed)
     this.oppCurrentWord = this.oppStream.next()
     this.oppCleared = 0
     this.tugHistory.length = 0
@@ -152,6 +153,13 @@ export class GameStore {
 
   getState(): GameState {
     return this.state
+  }
+
+  /** Update the local player's display name (reflected on the results screen). */
+  setMyName(name: string): void {
+    this.myName = name
+    this.state.players.me.name = name
+    this.emit('change', this.state)
   }
 
   /** Words the opponent cleared — for the results summary. */

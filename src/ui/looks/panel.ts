@@ -2,55 +2,29 @@ import { LOOK_GROUPS, type LookCategoryGroup, type LookItem } from './catalogue.
 import type { LookController } from './controller.ts'
 
 /**
- * Pre-match lobby: a Snapchat-style look picker. Category tabs (Lenses /
- * Filters) swap a horizontally-scrolling carousel of swatches; the leading
- * "None" chip clears everything. Picking a swatch applies the look to the live
- * feed immediately through the {@link LookController}; only one look is active at
- * a time, and the selection persists across tabs.
+ * Reusable looks carousel — category tabs + a horizontally-scrolling swatch row
+ * with a leading "None" chip. Picks apply to the live camera immediately through
+ * the {@link LookController}; only one look is active at a time and the selection
+ * persists across tabs. Embedded by the lobby room and the practice looks sheet
+ * (no surrounding chrome of its own).
  */
-export interface LookPickerCallbacks {
-  /** Start a real match vs the rival. */
-  onStart: () => void
-  /** Enter the solo Practice room. */
-  onPractice: () => void
-}
-
-export class LookPicker {
-  private root: HTMLElement
+export class LooksPanel {
   private controller: LookController
-  private cb: LookPickerCallbacks
-  private swatchRow!: HTMLDivElement
   private tabRow!: HTMLDivElement
+  private swatchRow!: HTMLDivElement
   private activeGroup: LookCategoryGroup = LOOK_GROUPS[0]
   private selectedId: string | null = null
   private buttons = new Map<string, HTMLButtonElement>()
 
-  constructor(root: HTMLElement, controller: LookController, cb: LookPickerCallbacks) {
-    this.root = root
+  constructor(root: HTMLElement, controller: LookController) {
     this.controller = controller
-    this.cb = cb
-    this.build()
-    this.showGroup(this.activeGroup)
-  }
-
-  private build(): void {
-    this.root.innerHTML = `
-      <div class="lobby-sheet">
-        <div class="lobby-notch">ARENA<span class="accent">SL</span></div>
-        <div class="lobby-head">
-          <div class="lobby-title">Pick your vibe</div>
-          <div class="lobby-sub">Lenses &amp; filters — try one, then go.</div>
-        </div>
-        <div class="look-tabs" data-tabs></div>
-        <div class="skin-swatches" data-swatches></div>
-        <div class="lobby-actions">
-          <button class="btn-tactile btn-light lobby-practice" type="button" data-practice>Practice</button>
-          <button class="btn-tactile btn-coral lobby-start" type="button" data-start>Start match</button>
-        </div>
-      </div>
+    root.classList.add('looks-panel')
+    root.innerHTML = `
+      <div class="look-tabs" data-tabs></div>
+      <div class="skin-swatches" data-swatches></div>
     `
-    this.tabRow = this.root.querySelector<HTMLDivElement>('[data-tabs]')!
-    this.swatchRow = this.root.querySelector<HTMLDivElement>('[data-swatches]')!
+    this.tabRow = root.querySelector<HTMLDivElement>('[data-tabs]')!
+    this.swatchRow = root.querySelector<HTMLDivElement>('[data-swatches]')!
 
     for (const group of LOOK_GROUPS) {
       const tab = document.createElement('button')
@@ -61,23 +35,7 @@ export class LookPicker {
       tab.addEventListener('click', () => this.showGroup(group))
       this.tabRow.append(tab)
     }
-
-    this.root.querySelector<HTMLButtonElement>('[data-start]')!
-      .addEventListener('click', () => this.cb.onStart())
-    this.root.querySelector<HTMLButtonElement>('[data-practice]')!
-      .addEventListener('click', () => this.cb.onPractice())
-  }
-
-  show(): void {
-    this.root.classList.remove('hidden')
-  }
-
-  hide(): void {
-    this.root.classList.add('hidden')
-  }
-
-  toggle(): void {
-    this.root.classList.toggle('hidden')
+    this.showGroup(this.activeGroup)
   }
 
   private showGroup(group: LookCategoryGroup): void {
@@ -85,11 +43,7 @@ export class LookPicker {
     for (const tab of this.tabRow.querySelectorAll<HTMLButtonElement>('.look-tab')) {
       tab.classList.toggle('active', tab.dataset.cat === group.category)
     }
-
-    this.swatchRow.innerHTML = ''
-    this.buttons.clear()
-    this.swatchRow.append(this.noneSwatch())
-    for (const item of group.items) this.swatchRow.append(this.swatch(item))
+    this.swatchRow.replaceChildren(this.noneSwatch(), ...group.items.map((i) => this.swatch(i)))
     this.syncActive()
   }
 
@@ -113,12 +67,10 @@ export class LookPicker {
     const btn = document.createElement('button')
     btn.className = 'skin-swatch'
     btn.type = 'button'
-
     const thumbStyle =
       item.category === 'filter' && item.swatch
         ? `--accent:${item.accent};background:${item.swatch}`
         : `--accent:${item.accent}`
-
     btn.innerHTML = `
       <span class="skin-thumb" style="${thumbStyle}">
         ${item.emoji ? `<span class="look-glyph">${item.emoji}</span>` : ''}
@@ -126,7 +78,6 @@ export class LookPicker {
       </span>
       <span class="skin-name">${item.name}</span>
     `
-
     btn.addEventListener('click', () => this.select(item, btn))
     this.buttons.set(item.id, btn)
     return btn
@@ -139,7 +90,6 @@ export class LookPicker {
     btn.classList.add('active')
   }
 
-  /** Re-highlight the active look after a tab switch (or show None selected). */
   private syncActive(): void {
     const key = this.selectedId ?? '__none__'
     for (const [id, btn] of this.buttons) btn.classList.toggle('active', id === key)
