@@ -3,6 +3,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from asl.library import load_templates
 from asl.matcher import Matcher
+from asl.schema import match_features
 from asl.session import Session
 from server.connection import handle_message
 from server.prompts import prompt_stream
@@ -21,9 +22,13 @@ CONFIRM_DROP = float(os.environ.get("ASL_CONFIRM_DROP", "0.8"))
 # needed). ~10 frames ≈ 0.4s. Lower = quicker accept.
 CONFIRM_HOLD = int(os.environ.get("ASL_CONFIRM_HOLD", "10"))
 MISS_BUDGET = None  # no auto-miss/timer — advance only on a correct sign
-WINDOW_SIZE = int(os.environ.get("ASL_WINDOW_SIZE", "48"))  # ~1.5-2s at 25-30fps
+# Small window so strength tracks RECENT motion and reacts fast. (Frame-based, so
+# at low fps it spans more time — keep it short.)
+WINDOW_SIZE = int(os.environ.get("ASL_WINDOW_SIZE", "16"))
 
-_templates = load_templates(TEMPLATES_DIR)
+# Reduce templates to the hands-only xy match features (same as live frames).
+_templates = {g: [match_features(t) for t in seqs]
+              for g, seqs in load_templates(TEMPLATES_DIR).items()}
 _matcher = Matcher(_templates, scale=SCALE)
 _vocab = sorted(_templates)
 

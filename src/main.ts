@@ -95,12 +95,15 @@ async function main(): Promise<void> {
 
   let fps = 0
   let prev = performance.now()
+  let frameN = 0
+  const CLIP_EVERY = 4 // run the demo-clip detector only every Nth frame (perf)
 
   const loop = () => {
     const now = performance.now()
     const dt = (now - prev) / 1000
     prev = now
     if (dt > 0) fps = fps * 0.9 + (1 / dt) * 0.1
+    frameN++
 
     let msg: LandmarkMessage | null = null
     if (video.readyState >= 2) {
@@ -109,8 +112,8 @@ async function main(): Promise<void> {
       drawLandmarks(landmarks, video, msg) // live vectors over the feed
     }
 
-    // Expected vectors from the demo clip, drawn over the (mirrored) clip box.
-    if (clip.readyState >= 2 && clip.videoWidth) {
+    // Expected vectors from the demo clip — throttled; it's only a reference.
+    if (frameN % CLIP_EVERY === 0 && clip.readyState >= 2 && clip.videoWidth) {
       if (clipLandmarks.width !== clip.clientWidth || clipLandmarks.height !== clip.clientHeight) {
         clipLandmarks.width = clip.clientWidth
         clipLandmarks.height = clip.clientHeight

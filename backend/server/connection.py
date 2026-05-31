@@ -1,6 +1,6 @@
 from typing import Optional
 from asl.features import normalize_frame
-from asl.schema import assemble_frame
+from asl.schema import assemble_frame, match_features
 from asl.session import State
 
 
@@ -23,8 +23,8 @@ def handle_message(session, msg: dict) -> Optional[dict]:
     try:
         t = float(msg["t"])
         frame = assemble_frame(msg.get("pose"), msg.get("handLeft"), msg.get("handRight"))
-        normalized = normalize_frame(frame).flatten()
+        features = match_features(normalize_frame(frame).flatten())  # hands-only xy
     except (KeyError, TypeError, ValueError):
         return None  # malformed/incomplete frame -> send nothing
-    state = session.push(normalized, t)
+    state = session.push(features, t)
     return state_to_dict(state)

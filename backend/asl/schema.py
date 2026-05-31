@@ -7,6 +7,18 @@ N_POSE = len(POSE_INDICES)
 N_HAND = 21
 N_KEYPOINTS = N_POSE + 2 * N_HAND  # 7 + 42 = 49
 
+# Columns of a flattened (T, 49*3) frame to actually MATCH on: both hands, x & y
+# only. Pose is dropped (near-constant after shoulder normalization, it dilutes
+# the hand signal) and z is dropped (noisy, camera-dependent). Shoulders are
+# still used upstream by normalize_frame. 42 hand keypoints x 2 = 84 dims.
+HAND_XY_COLS = [k * 3 + a for k in range(N_POSE, N_KEYPOINTS) for a in (0, 1)]
+
+
+def match_features(arr: np.ndarray) -> np.ndarray:
+    """Reduce a flattened (..., 49*3) frame/sequence to the hand-xy match
+    columns (..., 84). Applied to both live frames and reference templates."""
+    return np.asarray(arr, dtype=float)[..., HAND_XY_COLS]
+
 
 def assemble_frame(pose, hand_left, hand_right) -> np.ndarray:
     """Assemble MediaPipe landmark lists into the unified (49, 3) schema.

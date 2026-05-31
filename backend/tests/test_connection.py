@@ -25,7 +25,7 @@ def test_handle_message_pushes_normalized_frame():
     out = handle_message(s, _msg())
     frame, t = s.pushed[0]
     assert t == 1.5
-    assert frame.shape == (49 * 3,)        # normalized + flattened
+    assert frame.shape == (42 * 2,)        # normalized -> hands-only xy (84)
     assert out["event"] == "get"
     assert out["confirmed"] == "book"
 
