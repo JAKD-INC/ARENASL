@@ -15,6 +15,8 @@ import { LensRenderer } from './ui/lenses/lensRenderer.ts'
 import { LookController } from './ui/looks/controller.ts'
 import { Router } from './app/router.ts'
 import { createNetClient } from './net/wsClient.ts'
+import { MockNetClient } from './net/mockClient.ts'
+import { ensureAuth } from './net/auth.ts'
 import type { OpponentView } from './net/protocol.ts'
 import { TitleScreen } from './ui/screens/title.ts'
 import { NameEntryScreen } from './ui/screens/nameEntry.ts'
@@ -91,7 +93,7 @@ async function main(): Promise<void> {
   captureRoot.classList.add('hidden')
 
   const driver = new MockDriver(store)
-  const net = createNetClient()
+  let net = createNetClient()
   const router = new Router(screensRoot)
   const coach = new CoachOverlay(coachRoot)
 
@@ -112,7 +114,6 @@ async function main(): Promise<void> {
           displayName = n
           localStorage.setItem(NAME_KEY, n)
           store.setMyName(n)
-          void net.connect(n) // mock: re-stamps identity; real: reconnect
           goTitle()
         },
       }),
@@ -167,13 +168,41 @@ async function main(): Promise<void> {
   }
 
   // --- match start handshake (mock or real, same events) ---
+  // Re-attachable because `net` can fall back to the mock client if the backend
+  // is unreachable at boot.
   let pendingOpponent: OpponentView | null = null
-  net.on((e) => {
-    if (e.type === 'matchFound') pendingOpponent = e.opponent
-    else if (e.type === 'warmupStart') {
-      goWarmup(e.wordSeed, pendingOpponent ?? { playerId: 2, displayName: 'Rival', elo: 1000 })
+  let unsubMatch: (() => void) | null = null
+  function subscribeMatchEvents(): void {
+    unsubMatch?.()
+    unsubMatch = net.on((e) => {
+      if (e.type === 'matchFound') pendingOpponent = e.opponent
+      else if (e.type === 'warmupStart') {
+        goWarmup(e.wordSeed, pendingOpponent ?? { playerId: 2, displayName: 'Rival', elo: 1000 })
+      }
+    })
+  }
+
+  /**
+   * Authenticate (per-device account → JWT) and connect to the backend. If the
+   * backend is unreachable, fall back to the offline mock so Practice and a
+   * standalone demo still work.
+   */
+  async function connectNet(name: string): Promise<void> {
+    if (!(net instanceof MockNetClient)) {
+      try {
+        const id = await ensureAuth(name)
+        store.setMyName(id.displayName)
+        await net.connect(id.displayName, id.token)
+        subscribeMatchEvents()
+        return
+      } catch (err) {
+        console.warn('Backend unavailable — running offline (mock):', err)
+        net = new MockNetClient()
+      }
     }
-  })
+    await net.connect(name)
+    subscribeMatchEvents()
+  }
 
   // --- audio + capture/practice visibility follow the phase machine ---
   let prevCountdown = -1
@@ -197,7 +226,7 @@ async function main(): Promise<void> {
     void results.show(store, MATCH_ID)
   })
 
-  // --- boot: name (first run) → connect → title ---
+  // --- boot: name (first run) → auth + connect → title ---
   landmarks.start().catch((err) => console.warn('Landmark provider unavailable:', err))
   if (!displayName) {
     router.show(
@@ -205,15 +234,13 @@ async function main(): Promise<void> {
         onSubmit: async (n) => {
           displayName = n
           localStorage.setItem(NAME_KEY, n)
-          store.setMyName(n)
-          await net.connect(n)
+          await connectNet(n)
           goTitle()
         },
       }),
     )
   } else {
-    store.setMyName(displayName)
-    await net.connect(displayName)
+    await connectNet(displayName)
     goTitle()
   }
 }
