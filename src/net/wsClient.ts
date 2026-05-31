@@ -1,4 +1,12 @@
-import type { Lobby, NetClient, NetEvent, NetListener, OpponentView } from './protocol.ts'
+import type {
+  Lobby,
+  LandmarkPayload,
+  NetClient,
+  NetEvent,
+  NetListener,
+  OpponentView,
+  PlayerProgress,
+} from './protocol.ts'
 import { MockNetClient } from './mockClient.ts'
 
 /**
@@ -64,8 +72,9 @@ export class WebSocketNetClient implements NetClient {
     // disconnect or when you create/join elsewhere. Reconnect to return to idle.
     this.disconnect()
   }
-  sendSignAttempt(wordIndex: number, accuracy: number): void {
-    this.send({ type: 'sign.attempt', word_index: wordIndex, accuracy })
+  sendLandmark(frame: LandmarkPayload): void {
+    // Server accepts camelCase handLeft/handRight (populate_by_name alias).
+    this.send({ type: 'landmark', t: frame.t, pose: frame.pose, handLeft: frame.handLeft, handRight: frame.handRight })
   }
 
   on(listener: NetListener): () => void {
@@ -128,8 +137,16 @@ export class WebSocketNetClient implements NetClient {
           recordStartMs: (msg.record_start_ms as number) ?? 0,
         })
         break
+      case 'recognition.update':
+        this.emit({
+          type: 'recognitionUpdate',
+          wordIndex: msg.word_index as number,
+          word: msg.word as string,
+          strength: msg.strength as number,
+        })
+        break
       case 'match.state':
-        this.emit({ type: 'matchState', matchId: msg.match_id as string, opponent: this.opponentProgress(msg) })
+        this.emit({ type: 'matchState', matchId: msg.match_id as string, players: mapPlayers(msg) })
         break
       case 'match.over':
         this.emit({
@@ -146,11 +163,15 @@ export class WebSocketNetClient implements NetClient {
     }
   }
 
-  private opponentProgress(msg: Record<string, unknown>): { hp: number; wordIndex: number } | null {
-    const players = (msg.players as Array<Record<string, unknown>>) ?? []
-    const opp = players.find((p) => p.player_id !== this.playerId)
-    return opp ? { hp: opp.hp as number, wordIndex: opp.word_index as number } : null
-  }
+}
+
+function mapPlayers(msg: Record<string, unknown>): PlayerProgress[] {
+  const players = (msg.players as Array<Record<string, unknown>>) ?? []
+  return players.map((p) => ({
+    playerId: p.player_id as number,
+    hp: p.hp as number,
+    wordIndex: p.word_index as number,
+  }))
 }
 
 function mapLobby(msg: Record<string, unknown>): Lobby {
@@ -177,7 +198,14 @@ function mapOpponent(o: Record<string, unknown>): OpponentView {
  * (or `?server=` in the URL) to use the real backend.
  */
 export function createNetClient(): NetClient {
-  const fromQuery = new URLSearchParams(location.search).get('server')
-  const url = fromQuery ?? localStorage.getItem('arenasl.server')
-  return url ? new WebSocketNetClient(url) : new MockNetClient()
+  const params = new URLSearchParams(location.search)
+  if (params.get('mock') === '1') return new MockNetClient()
+  const server = params.get('server') ?? localStorage.getItem('arenasl.server') ?? '/ws'
+  return new WebSocketNetClient(resolveWsUrl(server))
+}
+
+function resolveWsUrl(s: string): string {
+  if (/^wss?:/.test(s)) return s
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${proto}://${location.host}${s.startsWith('/') ? s : `/${s}`}`
 }

@@ -29,10 +29,20 @@ export interface OpponentView {
   elo: number
 }
 
-/** Live opponent state the server streams during a duel (authoritative). */
-export interface OpponentProgress {
+/** Authoritative per-player state the server streams during a duel. */
+export interface PlayerProgress {
+  playerId: number
   hp: number
   wordIndex: number
+}
+
+/** One frame of MediaPipe landmarks streamed up during an active match. */
+export interface LandmarkPayload {
+  /** Client clock (ms) — the server downsamples on this. */
+  t: number
+  pose: number[][] | null
+  handLeft: number[][] | null
+  handRight: number[][] | null
 }
 
 /** Server → client events the UI reacts to. */
@@ -44,7 +54,8 @@ export type NetEvent =
   | { type: 'matchFound'; matchId: string; role: 'offerer' | 'answerer'; opponent: OpponentView }
   | { type: 'warmupStart'; wordSeed: number; datasetVersion: string }
   | { type: 'matchStart'; matchId: string; wordSeed: number; recordStartMs: number }
-  | { type: 'matchState'; matchId: string; opponent: OpponentProgress | null }
+  | { type: 'matchState'; matchId: string; players: PlayerProgress[] }
+  | { type: 'recognitionUpdate'; wordIndex: number; word: string; strength: number }
   | { type: 'matchOver'; matchId: string; winnerId: number | null; elo: number | null; eloDelta: number | null }
   | { type: 'opponentStatus'; playerId: number; connected: boolean }
 
@@ -69,8 +80,8 @@ export interface NetClient {
   setReady(ready: boolean): void
   leaveLobby(): void
 
-  // in-match
-  sendSignAttempt(wordIndex: number, accuracy: number): void
+  // in-match: stream landmarks up; the server recognizes and streams results back
+  sendLandmark(frame: LandmarkPayload): void
 
   on(listener: NetListener): () => void
 

@@ -93,8 +93,8 @@ export class MockNetClient implements NetClient {
     this.starting = false
   }
 
-  sendSignAttempt(): void {
-    /* mock: the local MockDriver owns the opponent during the match */
+  sendLandmark(): void {
+    /* mock: the local SignCapture + MockDriver own the match offline */
   }
 
   // --- subscription ---------------------------------------------------------
