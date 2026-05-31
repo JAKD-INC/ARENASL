@@ -19,6 +19,7 @@ class Player:
     status: str = "idle"  # idle | in_lobby | queued | in_match
     lobby_code: str | None = None
     match_id: str | None = None  # set when the lobby fills; used to route signaling
+    warmup_session: object | None = None  # RecognitionSession while queued (practice)
 
 
 @dataclass
@@ -68,6 +69,7 @@ class Match:
     started_wall: datetime | None = None                        # wall clock (history row)
     winner_id: int | None = None
     event_log: list[dict] = field(default_factory=list)         # timestamped, replay backbone
+    recognizers: dict = field(default_factory=dict)             # pid -> RecognitionSession (live only)
 
 
 # --- module-level stores ----------------------------------------------------

@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app import recognition, words
 from app.config import get_settings
 from app.db import engine
 from app.matchmaking import matchmaking_loop
@@ -34,6 +35,25 @@ async def lifespan(app: FastAPI):
         dataset.version,
         len(dataset.entries),
     )
+
+    # Best-effort: load ASL templates. If they're absent the server still boots
+    # (recognition disabled); build them with `make templates`.
+    try:
+        glosses = recognition.init_matcher()
+        # Restrict the word stream to glosses that actually have templates, so
+        # every streamed word is recognizable.
+        active = words.restrict_to(glosses)
+        logger.info(
+            "ASL recognition ready: %d glosses; word stream = %s",
+            len(glosses),
+            active.version,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        logger.warning(
+            "ASL templates unavailable at %s (%s); recognition disabled",
+            settings.asl_templates_dir,
+            exc,
+        )
 
     # Background tasks. Keep strong references; cancel + await on shutdown.
     tasks = [

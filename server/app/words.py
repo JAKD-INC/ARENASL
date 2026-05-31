@@ -10,12 +10,14 @@ Phase 1a implements loading + lookup. The seeded PRNG word stream lands in 1e.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
 _MASK64 = (1 << 64) - 1
+DEFAULT_DIFFICULTY = 2.0  # word_strength for a templated gloss missing from the catalog
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,27 @@ def get_dataset() -> SignDataset:
     return _dataset
 
 
+def restrict_to(glosses) -> SignDataset:
+    """Rebuild the active dataset to exactly `glosses` (the templated set), pulling
+    difficulty from the loaded catalog (signs.json) and defaulting for any gloss the
+    catalog doesn't list. Guarantees every streamed word is recognizable. The
+    version is content-derived so a client can detect a mismatch."""
+    global _dataset
+    catalog = {e.word: e.difficulty for e in get_dataset().entries}
+    ordered = sorted(glosses)
+    if not ordered:
+        raise ValueError("cannot restrict dataset to an empty gloss set")
+    entries = tuple(
+        SignEntry(sign_id=g, word=g, difficulty=catalog.get(g, DEFAULT_DIFFICULTY))
+        for g in ordered
+    )
+    digest = hashlib.sha1(
+        ";".join(f"{e.word}:{e.difficulty}" for e in entries).encode()
+    ).hexdigest()[:8]
+    _dataset = SignDataset(version=f"asl-{len(entries)}-{digest}", entries=entries)
+    return _dataset
+
+
 # --- deterministic word stream ----------------------------------------------
 #
 # Both client and server must generate the IDENTICAL word at a given index from a
@@ -119,6 +142,15 @@ def _splitmix64(seed: int, index: int) -> int:
 def word_at(seed: int, index: int, dataset: SignDataset | None = None) -> SignEntry:
     ds = dataset or get_dataset()
     return ds.entries[_splitmix64(seed, index) % len(ds.entries)]
+
+
+def word_iter(seed: int):
+    """Infinite generator of words from the seeded stream — the prompt source for
+    a player's recognition session (asl.Session consumes an Iterator[str])."""
+    i = 0
+    while True:
+        yield word_at(seed, i).word
+        i += 1
 
 
 def random_seed() -> int:

@@ -54,6 +54,16 @@ class Settings(BaseSettings):
     reconnect_grace_seconds: int = 5
     match_ready_timeout_seconds: int = 60
 
+    # --- ASL recognition (server-side DTW; thresholds from the tuned backend) ---
+    asl_templates_dir: str = "./data/templates"
+    asl_scale: float = 0.5          # DTW distance at which strength = 1/e
+    asl_get_threshold: float = 0.6  # strength must peak above this to confirm
+    asl_confirm_drop: float = 0.8   # confirm once strength falls to this × peak
+    asl_miss_budget: float = 6.0    # seconds before a word times out (miss)
+    asl_window_size: int = 48       # rolling landmark window (~1.5-2s)
+    asl_overtake_frames: int = 2    # consecutive next-target wins to confirm
+    recognition_fps_cap: int = 15   # server-side per-player frame budget (phase 2e)
+
     # --- replay ---
     replay_dir: str = "./replays"
     replay_retention_days: int = 14

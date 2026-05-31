@@ -38,3 +38,21 @@ def test_word_strength_unknown_raises(domain):
 def test_random_seed_is_in_range(domain):
     s = words.random_seed()
     assert 0 <= s < 2**31
+
+
+def test_restrict_to_templated_glosses(domain):
+    # Catalog (signs.json) has 'go' and 'help'; restrict to a subset + an unknown.
+    ds = words.restrict_to(["help", "go", "novel_gloss"])
+    by_word = {e.word: e.difficulty for e in ds.entries}
+    assert set(by_word) == {"go", "help", "novel_gloss"}
+    assert by_word["go"] == 1.0           # from catalog
+    assert by_word["help"] == 1.5         # from catalog
+    assert by_word["novel_gloss"] == words.DEFAULT_DIFFICULTY  # fallback
+    # The active stream now only emits these words.
+    assert {words.word_at(5, i).word for i in range(30)} <= set(by_word)
+
+
+def test_restrict_to_empty_raises(domain):
+    import pytest
+    with pytest.raises(ValueError):
+        words.restrict_to([])

@@ -48,5 +48,25 @@ services:
       - ASL_BUILD_PER_GLOSS
     restart: unless-stopped
 
+  # Our game server: auth, matchmaking, lobbies, signaling, authoritative duel,
+  # replay, and (vendored) server-side ASL recognition. Linux runtime gives
+  # dtaidistance's compiled C DTW. Run tests with:
+  #     docker compose run --rm be-server pytest -q
+  # Run the server:
+  #     docker compose up be-server   (http://localhost:8001)
+  be-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: arenasl-server:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - asl-data:/data            # shares WLASL templates built by `builder`
+    environment:
+      # Dev fallbacks; override via host env or server/.env for anything real.
+      - JWT_SECRET=${JWT_SECRET:-dev-insecure-jwt-secret-change-me}
+      - TURN_SECRET=${TURN_SECRET:-dev-insecure-turn-secret-change-me}
+
 volumes:
   asl-data:

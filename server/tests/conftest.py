@@ -12,25 +12,28 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-not-for-production")
 os.environ.setdefault("TURN_SECRET", "test-turn-secret-not-for-production")
 
 _DB_FD, _DB_PATH = tempfile.mkstemp(suffix=".db")
-os.environ.setdefault("DB_URL", f"sqlite:///{_DB_PATH}")
+# Force (not setdefault) so tests stay isolated even when the container/host sets
+# DB_URL/REPLAY_DIR to real volume paths.
+os.environ["DB_URL"] = f"sqlite:///{_DB_PATH}"
 
 _DATASET = pathlib.Path(__file__).resolve().parent.parent / "app" / "data" / "signs.json"
 os.environ.setdefault("SIGNS_DATASET_PATH", str(_DATASET))
 
 _REPLAY_DIR = tempfile.mkdtemp(prefix="arenasl-replays-")
-os.environ.setdefault("REPLAY_DIR", _REPLAY_DIR)
+os.environ["REPLAY_DIR"] = _REPLAY_DIR
 
 import shutil  # noqa: E402
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import state  # noqa: E402
+from app import recognition, state  # noqa: E402
 from app.connection_manager import manager  # noqa: E402
 from app.db import engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models_db import Base  # noqa: E402
 from app.words import init_dataset  # noqa: E402
+from app.ws import handlers  # noqa: E402
 
 
 def _clear_replays() -> None:
@@ -47,6 +50,7 @@ def client():
     Base.metadata.create_all(engine)
     state.reset()
     manager.reset()
+    handlers.reset()
     _clear_replays()
     with TestClient(app) as c:
         yield c
@@ -60,11 +64,14 @@ def domain():
     Base.metadata.create_all(engine)
     state.reset()
     manager.reset()
+    recognition.reset()
+    handlers.reset()
     _clear_replays()
     init_dataset(str(_DATASET))
     yield
     state.reset()
     manager.reset()
+    recognition.reset()
 
 
 class FakeManager:

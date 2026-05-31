@@ -117,8 +117,11 @@ def create_queue_lobby(pid_a: int, pid_b: int) -> tuple[Lobby, Match]:
         members=[LobbyMember(player_id=pid_a), LobbyMember(player_id=pid_b)],
     )
     state.lobbies[lobby.code] = lobby
-    _mark_in_lobby(pid_a, lobby.code)
-    _mark_in_lobby(pid_b, lobby.code)
+    for pid in (pid_a, pid_b):
+        _mark_in_lobby(pid, lobby.code)
+        player = state.players.get(pid)
+        if player is not None:
+            player.warmup_session = None  # warmup ends when matched
     match = _fill_to_match(lobby)
     return lobby, match
 

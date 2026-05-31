@@ -17,15 +17,15 @@ def test_ws_auth_ok(client):
         assert isinstance(msg["player_id"], int)
 
 
-def test_ws_sign_attempt_without_match_errors(client):
+def test_ws_unknown_type_after_auth_gets_bad_message(client):
     token = register(client, email="echo@example.com")
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "auth", "token": token})
         assert ws.receive_json()["type"] == "auth.ok"
-        ws.send_json({"type": "sign.attempt", "word_index": 0, "accuracy": 1.0})
+        ws.send_json({"type": "sign.attempt", "word_index": 0})  # no longer a valid type
         resp = ws.receive_json()
         assert resp["type"] == "error"
-        assert resp["code"] == "not_in_match"
+        assert resp["code"] == "bad_message"
 
 
 def test_ws_bad_token_is_closed(client):

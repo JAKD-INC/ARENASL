@@ -12,10 +12,22 @@ import types
 
 import pytest
 
-from app import state
+from app import recognition, state
 from app.messages import LobbyCreate, LobbyJoin, LobbyReady
 from app.ws import handlers
 from tests.conftest import register_players
+
+
+class _DummyRecognizer:
+    def __init__(self, seed):
+        self._seed = seed
+
+    @property
+    def word_index(self):
+        return 0
+
+    def push_landmarks(self, *args):
+        return None
 
 
 @pytest.fixture
@@ -23,6 +35,13 @@ def fast_grace(monkeypatch):
     monkeypatch.setattr(
         handlers, "get_settings", lambda: types.SimpleNamespace(reconnect_grace_seconds=0.05)
     )
+
+
+@pytest.fixture
+def asl_ready(monkeypatch):
+    """Let a duel start without real templates (these tests don't send landmarks)."""
+    monkeypatch.setattr(recognition, "is_ready", lambda: True)
+    monkeypatch.setattr(recognition, "new_session", lambda seed: _DummyRecognizer(seed))
 
 
 async def _start_match(fm) -> None:
@@ -34,7 +53,7 @@ async def _start_match(fm) -> None:
     assert state.matches  # an active match exists
 
 
-def test_disconnect_then_timeout_forfeits(fake, fast_grace):
+def test_disconnect_then_timeout_forfeits(fake, fast_grace, asl_ready):
     register_players(fake, (1, "One", 1200), (2, "Two", 1200))
 
     async def scenario():
@@ -53,7 +72,7 @@ def test_disconnect_then_timeout_forfeits(fake, fast_grace):
     assert not state.matches
 
 
-def test_reconnect_within_grace_cancels_forfeit(fake, fast_grace):
+def test_reconnect_within_grace_cancels_forfeit(fake, fast_grace, asl_ready):
     register_players(fake, (1, "One", 1200), (2, "Two", 1200))
 
     async def scenario():

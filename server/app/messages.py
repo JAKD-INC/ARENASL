@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Union
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 # --- client -> server -------------------------------------------------------
 
@@ -48,14 +48,22 @@ class Signal(BaseModel):
     data: dict  # opaque WebRTC sdp/ice/bye; the server never parses this
 
 
-class SignAttempt(BaseModel):
-    type: Literal["sign.attempt"]
-    word_index: int
-    accuracy: float
+class Landmark(BaseModel):
+    """One frame of MediaPipe landmarks streamed during an active match. Kept
+    loosely typed (lists, not per-point models) — this arrives many times/second
+    and assemble_frame() validates the shapes. Browser sends handLeft/handRight."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: Literal["landmark"]
+    t: float
+    pose: list | None = None
+    hand_left: list | None = Field(default=None, alias="handLeft")
+    hand_right: list | None = Field(default=None, alias="handRight")
 
 
 ClientMessage = Annotated[
-    Union[Auth, QueueJoin, QueueLeave, LobbyCreate, LobbyJoin, LobbyReady, Signal, SignAttempt],
+    Union[Auth, QueueJoin, QueueLeave, LobbyCreate, LobbyJoin, LobbyReady, Signal, Landmark],
     Field(discriminator="type"),
 ]
 client_adapter: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)
@@ -142,6 +150,16 @@ class MatchState(BaseModel):
     type: Literal["match.state"] = "match.state"
     match_id: str
     players: list[PlayerState]
+
+
+class RecognitionUpdate(BaseModel):
+    """Per-frame feedback to the signing player (drives the strength UI). Sent
+    while a sign is in progress (no get/miss yet)."""
+
+    type: Literal["recognition.update"] = "recognition.update"
+    word_index: int
+    word: str
+    strength: float
 
 
 class MatchOver(BaseModel):

@@ -1,20 +1,20 @@
 {
-  "version": "2026.05.30-sample",
+  "version": "wlasl-15-v1",
   "entries": [
-    { "sign_id": "hello",       "word": "hello",       "difficulty": 1.0 },
-    { "sign_id": "thank_you",   "word": "thank you",   "difficulty": 1.5 },
-    { "sign_id": "please",      "word": "please",      "difficulty": 1.5 },
-    { "sign_id": "yes",         "word": "yes",         "difficulty": 1.0 },
-    { "sign_id": "no",          "word": "no",          "difficulty": 1.0 },
-    { "sign_id": "sorry",       "word": "sorry",       "difficulty": 2.0 },
-    { "sign_id": "name",        "word": "name",        "difficulty": 2.0 },
-    { "sign_id": "friend",      "word": "friend",      "difficulty": 2.5 },
-    { "sign_id": "family",      "word": "family",      "difficulty": 3.0 },
-    { "sign_id": "water",       "word": "water",       "difficulty": 2.0 },
-    { "sign_id": "food",        "word": "food",        "difficulty": 2.0 },
-    { "sign_id": "help",        "word": "help",        "difficulty": 2.5 },
-    { "sign_id": "love",        "word": "love",        "difficulty": 2.0 },
-    { "sign_id": "happy",       "word": "happy",       "difficulty": 2.5 },
-    { "sign_id": "understand",  "word": "understand",  "difficulty": 3.5 }
+    { "sign_id": "go",       "word": "go",       "difficulty": 1.0 },
+    { "sign_id": "eat",      "word": "eat",      "difficulty": 1.0 },
+    { "sign_id": "name",     "word": "name",     "difficulty": 1.5 },
+    { "sign_id": "drink",    "word": "drink",    "difficulty": 1.5 },
+    { "sign_id": "help",     "word": "help",     "difficulty": 1.5 },
+    { "sign_id": "water",    "word": "water",    "difficulty": 2.0 },
+    { "sign_id": "work",     "word": "work",     "difficulty": 2.0 },
+    { "sign_id": "play",     "word": "play",     "difficulty": 2.0 },
+    { "sign_id": "book",     "word": "book",     "difficulty": 2.0 },
+    { "sign_id": "happy",    "word": "happy",    "difficulty": 2.5 },
+    { "sign_id": "learn",    "word": "learn",    "difficulty": 2.5 },
+    { "sign_id": "friend",   "word": "friend",   "difficulty": 2.5 },
+    { "sign_id": "family",   "word": "family",   "difficulty": 3.0 },
+    { "sign_id": "teacher",  "word": "teacher",  "difficulty": 3.0 },
+    { "sign_id": "computer", "word": "computer", "difficulty": 3.0 }
   ]
 }

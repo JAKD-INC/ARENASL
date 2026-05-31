@@ -43,24 +43,16 @@ def start_match(match: state.Match, now: float) -> None:
             player.status = "in_match"
 
 
-def handle_attempt(
-    match: state.Match, pid: int, word_index: int, accuracy: float, now: float
+def apply_completion(
+    match: state.Match, pid: int, word: str, word_index: int, strength: float, now: float
 ) -> bool:
-    """Apply a sign attempt. Returns True iff this attempt ended the match.
-    Raises MatchError on anything the server won't accept."""
+    """Apply a server-recognized completed sign. `word`/`word_index`/`strength`
+    come from the player's authoritative RecognitionSession, so there's nothing
+    client-supplied to validate. Returns True iff this ended the match."""
     if match.state != "active":
         raise MatchError("match_not_active", "Match is not active")
-    if pid not in match.hp:
-        raise MatchError("not_in_match", "You are not in this match")
 
-    expected = match.word_index[pid]
-    if word_index != expected:
-        raise MatchError("bad_word_index", f"Expected word_index {expected}")
-    if not (0.0 <= accuracy <= 1.0):
-        raise MatchError("bad_accuracy", "accuracy must be within [0, 1]")
-
-    entry = words.word_at(match.word_seed, word_index)
-    damage = entry.difficulty * accuracy * get_settings().damage_scale
+    damage = words.get_dataset().word_strength(word) * strength * get_settings().damage_scale
     opponent = next(p for p in match.player_ids if p != pid)
 
     match.hp[pid] = min(MAX_HP, match.hp[pid] + damage)
@@ -70,11 +62,11 @@ def handle_attempt(
     match.event_log.append(
         {
             "t": _t_ms(match, now),
-            "type": "attempt",
+            "type": "get",
             "player_id": pid,
             "word_index": word_index,
-            "word": entry.word,
-            "accuracy": accuracy,
+            "word": word,
+            "strength": strength,
             "damage": damage,
             "hp": dict(match.hp),
         }
@@ -86,3 +78,13 @@ def handle_attempt(
         match.event_log.append({"t": _t_ms(match, now), "type": "over", "winner_id": pid})
         return True
     return False
+
+
+def apply_miss(match: state.Match, pid: int, word_index: int, now: float) -> None:
+    """A word timed out for this player: advance past it, no damage."""
+    if match.state != "active":
+        return
+    match.word_index[pid] = word_index + 1
+    match.event_log.append(
+        {"t": _t_ms(match, now), "type": "miss", "player_id": pid, "word_index": word_index}
+    )

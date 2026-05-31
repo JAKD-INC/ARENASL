@@ -8,12 +8,13 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app import lobby, matchmaking, replay, results, signaling, state, turn, warmup
+from app import lobby, matchmaking, recognition, replay, results, signaling, state, turn, warmup
 from app import match as match_engine
 from app.config import get_settings
 from app.connection_manager import manager
 from app.messages import (
     ClientMessage,
+    Landmark,
     LobbyCreate,
     LobbyJoin,
     LobbyMemberView,
@@ -29,8 +30,8 @@ from app.messages import (
     QueueJoin,
     QueueLeave,
     QueueStatus,
+    RecognitionUpdate,
     Signal,
-    SignAttempt,
     WarmupStart,
     error,
 )
@@ -43,9 +44,19 @@ logger = logging.getLogger("arenasl.handlers")
 # here keeps a strong reference (the event loop only weak-refs tasks).
 _forfeit_tasks: dict[int, asyncio.Task] = {}
 
+# Last processed landmark timestamp (client clock) per player — used to downsample
+# recognition to RECOGNITION_FPS_CAP frames per second of gameplay time.
+_last_frame_t: dict[int, float] = {}
+
 
 def register_player(pid: int, display_name: str, elo: int) -> None:
     state.players[pid] = Player(id=pid, display_name=display_name, elo=elo)
+
+
+def reset() -> None:
+    """Test helper: clear module-level per-connection bookkeeping."""
+    _forfeit_tasks.clear()
+    _last_frame_t.clear()
 
 
 def register_or_reconnect(pid: int, display_name: str, elo: int) -> bool:
@@ -89,8 +100,8 @@ async def dispatch(pid: int, msg: ClientMessage) -> None:
         await _on_queue_leave(pid)
     elif isinstance(msg, Signal):
         await _on_signal(pid, msg.data)
-    elif isinstance(msg, SignAttempt):
-        await _on_sign_attempt(pid, msg.word_index, msg.accuracy)
+    elif isinstance(msg, Landmark):
+        await _on_landmark(pid, msg)
     else:
         await manager.send(
             pid, error("unsupported", f"'{msg.type}' is not available yet")
@@ -113,6 +124,7 @@ async def handle_disconnect(pid: int) -> None:
         return
 
     matchmaking.leave_queue(pid)
+    _last_frame_t.pop(pid, None)
     remaining = lobby.leave_lobby(pid)
     if remaining is not None:
         await _broadcast_lobby_update(remaining)
@@ -181,32 +193,90 @@ async def _on_lobby_ready(pid: int, ready: bool) -> None:
 
 
 async def _start_duel(match: Match) -> None:
+    if not recognition.is_ready():
+        await manager.broadcast(
+            match.player_ids,
+            error("recognition_unavailable", "Sign recognition is not available"),
+        )
+        return
     now = asyncio.get_running_loop().time()
     match_engine.start_match(match, now)
+    for pid in match.player_ids:
+        match.recognizers[pid] = recognition.new_session(match.word_seed)
     await manager.broadcast(
         match.player_ids, MatchStart(match_id=match.id, word_seed=match.word_seed)
     )
     await _broadcast_match_state(match)
 
 
-# --- sign attempts (authoritative duel) -------------------------------------
+# --- landmark frames -> server-side recognition (authoritative duel) --------
 
 
-async def _on_sign_attempt(pid: int, word_index: int, accuracy: float) -> None:
+async def _on_landmark(pid: int, msg: Landmark) -> None:
+    if _throttled(pid, msg.t):
+        return  # downsample to the recognition fps cap
+
     match = _current_match(pid)
-    if match is None:
-        await manager.send(pid, error("not_in_match", "You are not in a match"))
-        return
-    now = asyncio.get_running_loop().time()
-    try:
-        finished = match_engine.handle_attempt(match, pid, word_index, accuracy, now)
-    except match_engine.MatchError as exc:
-        await manager.send(pid, error(exc.code, exc.message))
+    if match is not None and match.state == "active":
+        session = match.recognizers.get(pid)
+        if session is not None:
+            await _recognize_in_match(pid, match, session, msg)
         return
 
-    await _broadcast_match_state(match)
-    if finished:
-        await _finalize_match(match, reason="win")
+    # Warmup: a queued player practices; report strength, deal no damage.
+    player = state.players.get(pid)
+    if player is not None and player.status == "queued" and player.warmup_session is not None:
+        outcome = await asyncio.to_thread(
+            player.warmup_session.push_landmarks, msg.pose, msg.hand_left, msg.hand_right, msg.t
+        )
+        if outcome is not None:
+            await manager.send(
+                pid,
+                RecognitionUpdate(
+                    word_index=outcome.word_index, word=outcome.word, strength=outcome.strength
+                ),
+            )
+
+
+def _throttled(pid: int, t: float) -> bool:
+    """True if this frame should be dropped to honor the per-player fps cap."""
+    cap = get_settings().recognition_fps_cap
+    if cap <= 0:
+        return False
+    last = _last_frame_t.get(pid)
+    if last is not None and t - last < 1.0 / cap:
+        return True
+    _last_frame_t[pid] = t
+    return False
+
+
+async def _recognize_in_match(pid: int, match: Match, session, msg: Landmark) -> None:
+    # DTW is CPU-bound; offload so it never blocks the loop. Frames for one
+    # player are processed serially (the receive loop awaits each dispatch).
+    outcome = await asyncio.to_thread(
+        session.push_landmarks, msg.pose, msg.hand_left, msg.hand_right, msg.t
+    )
+    if outcome is None:
+        return  # unusable frame (no pose / degenerate shoulders)
+
+    now = asyncio.get_running_loop().time()
+    if outcome.event == "get":
+        finished = match_engine.apply_completion(
+            match, pid, outcome.word, outcome.word_index, outcome.strength, now
+        )
+        await _broadcast_match_state(match)
+        if finished:
+            await _finalize_match(match, reason="win")
+    elif outcome.event == "miss":
+        match_engine.apply_miss(match, pid, outcome.word_index, now)
+        await _broadcast_match_state(match)
+    else:
+        await manager.send(
+            pid,
+            RecognitionUpdate(
+                word_index=outcome.word_index, word=outcome.word, strength=outcome.strength
+            ),
+        )
 
 
 async def _finalize_match(match: Match, reason: str) -> None:
@@ -266,6 +336,7 @@ def _teardown_match(match: Match) -> None:
         task = _forfeit_tasks.pop(pid, None)
         if task is not None:
             task.cancel()
+        _last_frame_t.pop(pid, None)
         player = state.players.get(pid)
         if player is None:
             continue
@@ -293,15 +364,20 @@ async def _on_queue_join(pid: int) -> None:
     now = asyncio.get_running_loop().time()
     matchmaking.join_queue(pid, now)
 
-    # Hand out a warmup stream and the queue position. The ticker pairs players.
-    await manager.send(
-        pid, WarmupStart(word_seed=warmup.new_seed(), dataset_version=get_dataset().version)
-    )
+    # Hand out a warmup stream + a server-side recognizer for live practice
+    # feedback (no scoring). The ticker pairs players.
+    seed = warmup.new_seed()
+    if recognition.is_ready():
+        player.warmup_session = recognition.new_session(seed)
+    await manager.send(pid, WarmupStart(word_seed=seed, dataset_version=get_dataset().version))
     await manager.send(pid, QueueStatus(position=matchmaking.queue_position(pid)))
 
 
 async def _on_queue_leave(pid: int) -> None:
     matchmaking.leave_queue(pid)
+    player = state.players.get(pid)
+    if player is not None:
+        player.warmup_session = None
     await manager.send(pid, QueueStatus(position=0))
 
 
