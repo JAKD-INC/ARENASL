@@ -140,13 +140,13 @@ async function main(): Promise<void> {
     net.joinQueue()
     router.show(new FindRivalScreen(net, { onPaired: goLobby, onCancel: () => { net.leaveQueue(); goMode() } }))
   }
-  function goWarmup(opp: OpponentView): void {
-    // VS splash; the actual match begins on the server's `matchStart` event.
+  function goWarmup(seed: number, opp: OpponentView): void {
+    // VS splash, then begin the duel (server already started it on matchStart).
     router.show(
       new WarmupScreen(
         { name: opp.displayName, elo: opp.elo },
         { name: displayName || 'You', elo: net.elo ?? undefined },
-        { onDone: () => {} },
+        { onDone: () => void startNetMatch(seed, opp) },
       ),
     )
   }
@@ -190,10 +190,13 @@ async function main(): Promise<void> {
     unsubMatch?.()
     unsubMatch = net.on((e) => {
       if (e.type === 'matchFound') {
+        // The lobby just filled — note the opponent but STAY in the lobby room so
+        // both players can ready up. The duel only begins on matchStart.
         pendingOpponent = e.opponent
-        goWarmup(e.opponent) // VS splash; begins on matchStart
       } else if (e.type === 'matchStart') {
-        void startNetMatch(e.wordSeed, pendingOpponent ?? DEFAULT_OPP)
+        goWarmup(e.wordSeed, pendingOpponent ?? DEFAULT_OPP)
+      } else if (e.type === 'error') {
+        console.error('[arena] server error:', e.code, e.message)
       }
     })
   }
