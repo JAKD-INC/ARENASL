@@ -36,6 +36,7 @@ class Session:
         miss_points: int = -10,
         lookahead: int = 3,
         overtake_frames: int = 2,
+        confirm_hold: int = 10,
     ):
         if lookahead < 1:
             # push() probes queue[1] (the next target) every frame for the
@@ -53,6 +54,7 @@ class Session:
         self._get_points = get_points
         self._miss_points = miss_points
         self._overtake_frames = overtake_frames
+        self._confirm_hold = confirm_hold
 
         self._queue: deque[str] = deque(
             next(prompts) for _ in range(lookahead + 1)
@@ -61,6 +63,7 @@ class Session:
         self._score = 0
         self._peak = 0.0
         self._overtake = 0
+        self._hold = 0
         self._target_start: Optional[float] = None
 
     def _advance(self) -> None:
@@ -69,6 +72,7 @@ class Session:
         self._buffer.clear()
         self._peak = 0.0
         self._overtake = 0
+        self._hold = 0
         self._target_start = None
 
     def state(
@@ -114,12 +118,21 @@ class Session:
             self._overtake = 0
         sustained_overtake = self._overtake >= self._overtake_frames
 
-        # Sign confirmed once it peaked above threshold AND the signer moved on,
-        # detected EITHER by a dip from the peak OR by the next target SUSTAINED
-        # out-matching the current target across consecutive frames (overtake).
+        # Count CONSECUTIVE frames the current sign is held above the threshold,
+        # so a clearly-held sign confirms even if the signer never moves on.
+        if strength >= self._get_threshold:
+            self._hold += 1
+        else:
+            self._hold = 0
+        sustained_hold = self._hold >= self._confirm_hold
+
+        # Sign confirmed once it peaked above threshold AND any of: the signer
+        # moved on (a dip from the peak, or the next target SUSTAINED overtaking
+        # it), OR the sign was simply HELD above threshold long enough.
         if self._peak >= self._get_threshold and (
             strength <= self._peak * self._confirm_drop
             or sustained_overtake
+            or sustained_hold
         ):
             gloss = self._queue[0]
             self._score += self._get_points

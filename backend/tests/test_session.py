@@ -229,6 +229,20 @@ def test_high_plateau_no_overtake_no_dip_waits_for_miss_budget():
     assert st.score == -10
 
 
+def test_held_sign_confirms_without_dip_or_overtake():
+    # Strength holds above threshold with no dip and no overtake; after
+    # confirm_hold consecutive frames the held sign is accepted.
+    s = _session(["A", "B", "C"], [0.7, 0.7, 0.7, 0.7],
+                 get_threshold=0.5, confirm_hold=3)
+    assert s.push(_FRAME, t=0.0).event is None   # hold 1
+    assert s.push(_FRAME, t=0.1).event is None   # hold 2
+    st = s.push(_FRAME, t=0.2)                    # hold 3 -> confirm
+    assert st.event == "get"
+    assert st.confirmed == "A"
+    assert st.current == "B"
+    assert st.score == 20
+
+
 def test_no_auto_miss_when_budget_is_none():
     # miss_budget=None disables the timer entirely: however long the player
     # lingers on a weak sign, it never auto-misses and never advances.

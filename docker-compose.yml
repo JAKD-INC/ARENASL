@@ -51,6 +51,7 @@ services:
       - ASL_SCALE
       - ASL_GET_THRESHOLD
       - ASL_CONFIRM_DROP
+      - ASL_CONFIRM_HOLD
       - ASL_WINDOW_SIZE
     restart: unless-stopped
 

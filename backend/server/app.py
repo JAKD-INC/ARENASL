@@ -17,6 +17,9 @@ TEMPLATES_DIR = os.environ.get("ASL_TEMPLATES_DIR", "data/templates")
 SCALE = float(os.environ.get("ASL_SCALE", "10"))
 GET_THRESHOLD = float(os.environ.get("ASL_GET_THRESHOLD", "0.5"))
 CONFIRM_DROP = float(os.environ.get("ASL_CONFIRM_DROP", "0.8"))
+# Frames the sign must stay above threshold to confirm by holding (no dip/move-on
+# needed). ~10 frames ≈ 0.4s. Lower = quicker accept.
+CONFIRM_HOLD = int(os.environ.get("ASL_CONFIRM_HOLD", "10"))
 MISS_BUDGET = None  # no auto-miss/timer — advance only on a correct sign
 WINDOW_SIZE = int(os.environ.get("ASL_WINDOW_SIZE", "48"))  # ~1.5-2s at 25-30fps
 
@@ -34,6 +37,7 @@ async def ws(websocket: WebSocket):
         _matcher, prompt_stream(_vocab, seed=0),
         get_threshold=GET_THRESHOLD, confirm_drop=CONFIRM_DROP,
         miss_budget=MISS_BUDGET, window_size=WINDOW_SIZE, lookahead=3,
+        confirm_hold=CONFIRM_HOLD,
     )
     try:
         while True:
