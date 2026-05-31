@@ -28,7 +28,9 @@ export class ResultsScreen {
   }
 
   async show(store: GameStore, matchId: string): Promise<void> {
-    const replay = await fetchReplay(matchId)
+    // Replay is a nice-to-have — never let a missing/failed replay block the
+    // results screen (online matches have no mock replay and the endpoint is TBD).
+    const replay = await fetchReplay(matchId).catch(() => ({ videoUrl: null, timeline: [] }))
 
     const s = store.getState()
     const me = s.players.me
@@ -104,7 +106,7 @@ export class ResultsScreen {
 
     this.mountReplay(replay.videoUrl)
     this.setupBreakdownScroll()
-    void this.animate(steps, me.score, opp.score)
+    void this.animate(steps, me.score, opp.score, finalHp)
   }
 
   hide(): void {
@@ -150,7 +152,12 @@ export class ResultsScreen {
     }
   }
 
-  private async animate(steps: TugStep[], myScore: number, oppScore: number): Promise<void> {
+  private async animate(
+    steps: TugStep[],
+    myScore: number,
+    oppScore: number,
+    finalHp: { me: number; opponent: number },
+  ): Promise<void> {
     const fill = this.root.querySelector<HTMLDivElement>('[data-tug]')
     const divider = this.root.querySelector<HTMLDivElement>('[data-divider]')
     const list = this.root.querySelector<HTMLUListElement>('[data-breakdown]')
@@ -187,6 +194,9 @@ export class ResultsScreen {
       }
       await delay(steps.length > 20 ? 60 : 150)
     }
+    // Land on the true final HP — covers online matches (no tug history) and any
+    // rounding from the step-by-step replay.
+    setTug(finalHp.me, finalHp.opponent)
     this.updateBreakdown?.()
   }
 
