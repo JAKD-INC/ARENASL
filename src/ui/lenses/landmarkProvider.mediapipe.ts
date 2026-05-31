@@ -129,7 +129,11 @@ export class MediaPipeLandmarkProvider implements LandmarkProvider {
     })
     const pose0 = poseResult.landmarks[0]
     this.recognition = {
-      t: ts,
+      // SECONDS, not ms: the server's recognition timing (miss budget, the
+      // min-interval debounce, the fps cap) is all in seconds. Sending raw
+      // performance.now() ms made `t - target_start` ~200 vs a 6s budget, so every
+      // word auto-missed on its 2nd frame ("passes instantly").
+      t: ts / 1000,
       pose: pose0 ? pose0.map(toXYZ) : null,
       handLeft,
       handRight,

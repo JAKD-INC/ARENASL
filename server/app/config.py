@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     asl_warmup_frames: int = 0             # advanced cascade-guard OFF by default
     asl_confirm_hold: int = 100000         # effectively DISABLED (today's behavior)
     asl_rank_every: int = 0                # 0/None => server-side ranking OFF
+    asl_rank_gate: int = 0                 # 0 => OFF; embedding mode defaults it to 2
+    asl_min_confirm_interval: float = 0.0  # 0 => OFF; embedding defaults to 2.0s debounce
 
     # --- replay ---
     replay_dir: str = "./replays"

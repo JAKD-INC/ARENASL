@@ -13,8 +13,7 @@ import type { LandmarkPayload, NetClient, NetEvent } from '../net/protocol.ts'
  *  - `match.state` → server-authoritative HP (revealed on the results screen).
  *  - `match.over` → winner + result.
  *
- * Replaces both the local heuristic {@link SignCapture} and the {@link MockDriver}
- * for networked matches; the store becomes a view of server state.
+ * The store becomes a view of server-authoritative state (recognition, HP, words).
  */
 export interface RecognitionSource {
   latestRecognition(): LandmarkPayload | null
@@ -46,7 +45,7 @@ export class NetMatchDriver {
     this.off.push(this.net.on((e) => this.onEvent(e)))
     const loop = (ts: number): void => {
       this.rafId = requestAnimationFrame(loop)
-      this.store.tick() // drive the elapsed-time clock (MockDriver does this offline)
+      this.store.tick() // drive the elapsed-time clock
       this.stream(ts)
     }
     this.rafId = requestAnimationFrame(loop)

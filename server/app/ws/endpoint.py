@@ -44,14 +44,17 @@ async def authenticate_ws(websocket: WebSocket) -> int | None:
         msg = client_adapter.validate_python(raw)
         if not isinstance(msg, Auth):
             raise ValueError("first message must be of type 'auth'")
-        return decode_token(msg.token)
+        uid = decode_token(msg.token)
+        logger.info("WS auth OK user=%s", uid)
+        return uid
     except (
         asyncio.TimeoutError,
         ValidationError,
         ValueError,
         jwt.InvalidTokenError,
         WebSocketDisconnect,
-    ):
+    ) as exc:
+        logger.info("WS auth FAILED (%s): %s", type(exc).__name__, exc)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return None
 
@@ -84,6 +87,8 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     try:
         while True:
             raw = await websocket.receive_json()
+            if isinstance(raw, dict) and raw.get("type") != "landmark":
+                logger.info("WS recv user=%s type=%s", user.id, raw.get("type"))
             try:
                 msg = client_adapter.validate_python(raw)
             except ValidationError as exc:

@@ -16,7 +16,7 @@ import numpy as np
 
 
 class EmbeddingMatcher:
-    def __init__(self, encode, prototypes):
+    def __init__(self, encode, prototypes, min_motion=0.0):
         """
         Args:
             encode: callable (window (T, 84) float32) -> L2-normed embedding (emb_dim,).
@@ -24,9 +24,59 @@ class EmbeddingMatcher:
                 embedding (emb_dim,) or a stack of them (k, emb_dim). Both forms are
                 stored as a (k, emb_dim) matrix so a gloss can hold several phase /
                 calibration prototypes.
+            min_motion: temporal-motion floor (mean per-coordinate std over the
+                window's time axis). A window below it has effectively NO hand motion
+                — a no-hands frame (MediaPipe zero-fills an undetected hand) or hands
+                held still — which this MOTION encoder maps to a near-universal ~1.0
+                cosine, causing false confirms. Such windows score worst. 0.0 (the
+                default) disables the gate, preserving the pure-cosine contract for
+                direct/unit use; `from_files` switches it on for production.
         """
         self._encode = encode
         self._protos = {g: self._as_matrix(p) for g, p in prototypes.items()}
+        self._min_motion = float(min_motion)
+        # Stacked, L2-normed prototype matrix for SINGLE-ENCODE ranking: every
+        # prototype row across all glosses, with `_row_gloss[i]` mapping row i to its
+        # gloss index in `_gloss_list`. rank() encodes the window once and does one
+        # matmul against this, instead of re-encoding per gloss (1308x).
+        self._gloss_list = list(self._protos)
+        rows = []
+        row_gloss = []
+        for gi, g in enumerate(self._gloss_list):
+            mat = self._protos[g]
+            norms = np.linalg.norm(mat, axis=1, keepdims=True)
+            norms[norms < 1e-12] = 1.0  # leave a zero row ~zero (ranks worst)
+            rows.append((mat / norms).astype(np.float32))
+            row_gloss.extend([gi] * mat.shape[0])
+        self._proto_matrix = (
+            np.concatenate(rows, axis=0) if rows else np.zeros((0, 0), np.float32)
+        )
+        self._row_gloss = np.asarray(row_gloss, dtype=np.intp)
+
+    def _embed(self, window: np.ndarray):
+        """Validate + encode a window into an L2-normed embedding. Raises ValueError
+        on a non-2-D window (a flat frame or a (B,T,84) batch is not a single motion
+        window). Returns None for a no-motion window (motion floor) or a degenerate
+        (zero-norm) embedding — callers map None to the worst score."""
+        win = np.asarray(window, dtype=np.float32)
+        if win.ndim != 2:
+            raise ValueError(
+                f"window must be a 2-D (T, 84) sequence, got ndim={win.ndim}; "
+                "the embedding matcher scores motion over time, not a single frame "
+                "or a batch"
+            )
+        # Motion floor: a window with (near) zero temporal variation has no hand
+        # motion to embed — a no-hands frame or hands held still — and this encoder
+        # maps such a constant to a ~1.0 cosine against most prototypes.
+        if self._min_motion > 0.0 and (
+            win.shape[0] < 2 or float(np.mean(np.std(win, axis=0))) < self._min_motion
+        ):
+            return None
+        emb = np.asarray(self._encode(win), dtype=np.float32).reshape(-1)
+        en = np.linalg.norm(emb)
+        if en < 1e-12:
+            return None
+        return emb / en  # L2-normed, so a cosine is a plain dot product
 
     @staticmethod
     def _as_matrix(p) -> np.ndarray:
@@ -47,28 +97,15 @@ class EmbeddingMatcher:
     def _cosines(self, window: np.ndarray, target: str) -> np.ndarray:
         """Cosines of the window's embedding against EACH of `target`'s prototypes.
 
-        Returns an empty array for a degenerate (zero-norm) embedding, which the
-        callers map to the worst score rather than a neutral one.
+        Returns an empty array for a no-motion window or a degenerate (zero-norm)
+        embedding, which the callers map to the worst score rather than a neutral one.
         """
-        # Require exactly a 2-D (T, 84) window. A flat (84,) frame is not a motion
-        # window; a 3-D (B, T, 84) batch would bypass from_files' batch-wrapping
-        # (which only prepends a batch axis when ndim == 2) and silently feed an
-        # extra axis to the encoder, yielding a meaningless score. Guard both.
-        win = np.asarray(window, dtype=np.float32)
-        if win.ndim != 2:
-            raise ValueError(
-                f"window must be a 2-D (T, 84) sequence, got ndim={win.ndim}; "
-                "the embedding matcher scores motion over time, not a single frame "
-                "or a batch"
-            )
-        protos = self._protos[target]  # KeyError on unknown target
-        emb = np.asarray(self._encode(win), dtype=np.float32).reshape(-1)
-        en = np.linalg.norm(emb)
-        if en < 1e-12:
+        protos = self._protos[target]  # KeyError on unknown target (validated first)
+        emb = self._embed(window)      # ValueError on bad ndim; None if degenerate
+        if emb is None:
             return np.empty(0, dtype=np.float32)
-        # Renormalize defensively: encoder output and prototypes are L2-normed, but a
-        # not-quite-unit injected encode (or float32 export rounding) would otherwise
-        # push cosines past +-1.0. Drop any zero-norm prototype rows from the pool.
+        # Drop any zero-norm prototype rows; renormalize the rest (the export may
+        # leave them not-quite-unit). emb is already unit, so this is a plain cosine.
         pn = np.linalg.norm(protos, axis=1)
         keep = pn >= 1e-12
         if not np.any(keep):
@@ -76,7 +113,7 @@ class EmbeddingMatcher:
         protos, pn = protos[keep], pn[keep]
         # Clamp to [-1, 1]: float32 rounding can push a near-unit cosine just past the
         # bounds, which would make strength leave [0, 1] or best_distance go negative.
-        return np.clip((protos @ emb) / (pn * en), -1.0, 1.0).astype(np.float32)
+        return np.clip((protos @ emb) / pn, -1.0, 1.0).astype(np.float32)
 
     def strength(self, window: np.ndarray, target: str) -> float:
         """Match strength in [0, 1]: MAX over `target`'s prototypes of (cosine + 1)/2.
@@ -100,16 +137,33 @@ class EmbeddingMatcher:
         return float(1.0 - cosines.max())
 
     def rank(self, window: np.ndarray, k: int = 3) -> list:
-        """Debug: the k closest glosses by best-per-gloss cosine distance (like
-        Matcher.rank). One entry per gloss, ranked by its nearest prototype."""
-        scored = sorted((self.best_distance(window, g), g) for g in self._protos)
-        return [{"gloss": g, "distance": round(d, 3)} for d, g in scored[:k]]
+        """The k closest glosses by best-per-gloss cosine distance. ONE entry per
+        gloss, ranked by its nearest prototype. Encodes the window ONCE (then a
+        single matmul over all prototype rows) so it is cheap enough for the
+        per-confirm open-set rank gate, not only the debug HUD. Returns [] for a
+        no-motion / degenerate window (nothing to rank)."""
+        emb = self._embed(window)  # ValueError on bad ndim; None if degenerate
+        if emb is None or self._proto_matrix.shape[0] == 0:
+            return []
+        cos = self._proto_matrix @ emb                       # (P,) one per proto row
+        best = np.full(len(self._gloss_list), -np.inf, dtype=np.float32)
+        np.maximum.at(best, self._row_gloss, cos)            # best phase per gloss
+        k = min(k, len(self._gloss_list))
+        top = np.argpartition(best, -k)[-k:]
+        top = top[np.argsort(best[top])[::-1]]               # sort the top-k desc
+        return [{"gloss": self._gloss_list[i], "distance": round(float(1.0 - best[i]), 3)}
+                for i in top]
 
     @classmethod
-    def from_files(cls, onnx_path, prototypes_path):
+    def from_files(cls, onnx_path, prototypes_path, min_motion=0.01):
         """Build an onnxruntime-backed matcher from an exported encoder + an .npz
         of prototypes (parallel arrays `glosses` and `protos`, ONE ROW PER PROTOTYPE
-        so a gloss may repeat for its k phase prototypes)."""
+        so a gloss may repeat for its k phase prototypes).
+
+        `min_motion` (on by default here) gates out no-motion windows — see __init__.
+        0.01 sits ~1000x above a constant window's 0.0 yet far below a real sign's
+        temporal std (WLASL clips: min ~0.006, median ~0.79), so it rejects no-hands
+        / held-still windows while passing genuine signing."""
         import onnxruntime as ort
 
         sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
@@ -137,4 +191,4 @@ class EmbeddingMatcher:
         for g, row in zip(glosses, protos_mat):
             grouped.setdefault(g, []).append(row)
         protos = {g: np.stack(rows, axis=0) for g, rows in grouped.items()}
-        return cls(encode, protos)
+        return cls(encode, protos, min_motion=min_motion)

@@ -75,6 +75,54 @@ def _session_with(matcher, prompts, **kwargs):
     return Session(matcher, itertools.cycle(prompts), **defaults)
 
 
+class StubMatcherWithRank(StubMatcher):
+    """A StubMatcher that also exposes rank() returning a fixed gloss ordering, so
+    the open-set rank gate can be exercised in isolation."""
+
+    def __init__(self, strengths, top_glosses):
+        super().__init__(strengths)
+        self._top = list(top_glosses)
+
+    def rank(self, window, k):
+        return [{"gloss": g, "distance": 0.1 * i} for i, g in enumerate(self._top[:k])]
+
+
+def test_rank_gate_blocks_confirm_when_prompt_not_top_k():
+    # Strength peaks at 0.95 then dips to 0.7 (<= 0.95*0.8) -> would confirm "A".
+    # But the rank gate (top-2) sees "A" only at rank 3, so the get is suppressed.
+    m = StubMatcherWithRank([0.5, 0.95, 0.7], top_glosses=["X", "Y", "A"])
+    s = _session_with(m, ["A", "B", "A"], rank_gate=2)
+    s.push(_FRAME, t=0.0)
+    s.push(_FRAME, t=0.1)
+    st = s.push(_FRAME, t=0.2)
+    assert st.event is None       # gated out: prompt not in top-2
+    assert st.current == "A"      # did not advance
+
+
+def test_rank_gate_allows_confirm_when_prompt_in_top_k():
+    # Same strengths, but now "A" is the top match -> the get goes through.
+    m = StubMatcherWithRank([0.5, 0.95, 0.7], top_glosses=["A", "Y", "Z"])
+    s = _session_with(m, ["A", "B", "A"], rank_gate=2)
+    s.push(_FRAME, t=0.0)
+    s.push(_FRAME, t=0.1)
+    st = s.push(_FRAME, t=0.2)
+    assert st.event == "get"
+    assert st.confirmed == "A"
+
+
+def test_min_confirm_interval_debounces_confirms():
+    # Two clean peak-then-dip confirms back to back; a 2s floor blocks the second
+    # until the interval elapses, so the stream can't sprint through words.
+    s = _session(["A", "B", "C"], [0.5, 0.95, 0.7, 0.95, 0.7, 0.7],
+                 min_confirm_interval=2.0, miss_budget=None)
+    assert s.push(_FRAME, t=0.0).event is None
+    assert s.push(_FRAME, t=0.1).event is None
+    assert s.push(_FRAME, t=0.2).event == "get"    # A confirmed
+    assert s.push(_FRAME, t=0.3).event is None
+    assert s.push(_FRAME, t=0.4).event is None      # B would confirm, but < 2s -> blocked
+    assert s.push(_FRAME, t=2.25).event == "get"    # >= 2s after A -> B confirms now
+
+
 def test_lookahead_below_one_is_rejected():
     # push() probes queue[1] every frame for the overtake path, so the queue
     # must hold at least two entries; lookahead < 1 must fail fast.

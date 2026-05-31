@@ -108,6 +108,24 @@ def test_rank_uses_best_per_gloss_across_phases():
     assert {r["gloss"] for r in ranked} == {"book", "drink"}  # no duplicate gloss rows
 
 
+def test_rank_encodes_window_once_not_per_gloss():
+    """rank() must encode the window ONCE (then a single matmul over all prototype
+    rows), not re-encode per gloss — otherwise it is unusable on the confirm path
+    (1308 ONNX forward passes per call)."""
+    calls = {"n": 0}
+
+    def counting_encode(window):
+        calls["n"] += 1
+        return _l2([1.0, 0.0, 0.0])
+
+    protos = {"book": _l2([1.0, 0.0, 0.0]), "drink": _l2([0.0, 1.0, 0.0]),
+              "eat": _l2([0.0, 0.0, 1.0])}
+    m = EmbeddingMatcher(counting_encode, protos)
+    ranked = m.rank(np.zeros((5, 84), np.float32), k=3)
+    assert calls["n"] == 1
+    assert ranked[0]["gloss"] == "book"  # highest cosine still ranked first
+
+
 def test_one_dim_window_raises_valueerror():
     """A flat (84,) frame is not a motion window; guard it instead of scoring noise."""
     m = EmbeddingMatcher(_fixed_encode([1.0, 0.0, 0.0]), _protos())
@@ -130,6 +148,31 @@ def test_three_dim_window_raises_valueerror():
         m.best_distance(np.zeros((1, 5, 84), np.float32), "book")
     with pytest.raises(ValueError):
         m.rank(np.zeros((1, 5, 84), np.float32))
+
+
+def test_no_motion_window_scores_worst_when_gated():
+    """A MOTION embedding of a NON-MOVING window is meaningless: a no-hands frame
+    (MediaPipe zero-fills an undetected hand) or hands held still produce a CONSTANT
+    window that the encoder maps to ~1.0 cosine against most prototypes -> false
+    confirms. With a motion floor, such a window must score worst (0.0) regardless
+    of the encoder's cosine."""
+    # encode would give cosine 1.0 (embedding == "book" prototype).
+    m = EmbeddingMatcher(_fixed_encode([1.0, 0.0, 0.0]), _protos(), min_motion=0.01)
+    const = np.full((6, 84), 0.3, np.float32)  # zero temporal variation
+    assert m.strength(const, "book") == pytest.approx(0.0)
+    assert m.best_distance(const, "book") == pytest.approx(2.0)
+    # A window WITH motion is scored normally — the gate must not fire on real signs.
+    moving = const.copy()
+    moving[::2] += 0.5  # temporal std >> 0.01
+    assert m.strength(moving, "book") == pytest.approx(1.0)
+
+
+def test_motion_gate_off_by_default_preserves_pure_cosine():
+    """Default (no motion floor) keeps the pure-cosine contract: a constant window
+    still scores by cosine, so direct construction is unchanged. The floor is a
+    production guard switched on by from_files, not the default."""
+    m = EmbeddingMatcher(_fixed_encode([1.0, 0.0, 0.0]), _protos())
+    assert m.strength(np.zeros((5, 84), np.float32), "book") == pytest.approx(1.0)
 
 
 def test_from_files_with_real_onnx(tmp_path):

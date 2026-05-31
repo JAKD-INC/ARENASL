@@ -4,8 +4,8 @@ import type { SoundEngine } from '../audio/sound.ts'
 
 /**
  * The live capture feedback overlay — the moment-to-moment "the game sees me"
- * loop. Implements {@link CaptureCallbacks} so it can be handed straight to the
- * {@link SignCapture}:
+ * loop. Implements {@link CaptureCallbacks} so the server-backed drivers
+ * ({@link PracticeDriver} / {@link NetMatchDriver}) can drive it:
  *  - waiting  → a pulsing "hands up to sign" prompt
  *  - holding  → a filling progress ring ("SIGN!") as the player performs
  *  - resolved → a big tiered PERFECT / GREAT / GOOD / MISS flash + points/combo

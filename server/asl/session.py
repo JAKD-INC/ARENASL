@@ -40,6 +40,8 @@ class Session:
         confirm_hold: int = 10,
         warmup_frames: int = 12,
         rank_every: Optional[int] = None,
+        rank_gate: Optional[int] = None,
+        min_confirm_interval: Optional[float] = None,
     ):
         if lookahead < 1:
             # push() probes queue[1] (the next target) every frame for the
@@ -60,6 +62,9 @@ class Session:
         self._confirm_hold = confirm_hold
         self._warmup_frames = warmup_frames
         self._rank_every = rank_every
+        self._rank_gate = rank_gate
+        self._min_confirm_interval = min_confirm_interval
+        self._last_confirm_t: Optional[float] = None
         self._rank_counter = 0
         self._topk: Optional[list] = None  # last computed debug ranking
 
@@ -157,13 +162,34 @@ class Session:
         # Sign confirmed once it peaked above threshold AND any of: the signer
         # moved on (a dip from the peak, or the next target SUSTAINED overtaking
         # it), OR the sign was simply HELD above threshold long enough.
-        if warmed_up and self._peak >= self._get_threshold and (
+        confirm = warmed_up and self._peak >= self._get_threshold and (
             strength <= self._peak * self._confirm_drop
             or sustained_overtake
             or sustained_hold
-        ):
+        )
+        # Open-set rank gate: a high strength to the prompt is NECESSARY but not
+        # sufficient — the encoder scores generic hand motion high against many
+        # glosses, so "any moving hand" would pass. Require the prompt to be among
+        # the top-`rank_gate` matches over ALL glosses for this window; otherwise the
+        # signer is doing something else and we must not confirm. Computed only when
+        # a confirm would otherwise fire (rare), and the matcher's rank() encodes the
+        # window once, so this stays cheap.
+        if confirm and self._rank_gate and hasattr(self._matcher, "rank"):
+            top = self._matcher.rank(window, self._rank_gate)
+            confirm = any(r["gloss"] == self._queue[0] for r in top)
+
+        # Minimum interval between confirms: even a clean, sustained sign cannot
+        # pass faster than this (debounce), so the stream can't sprint through
+        # words. The sign stays current and simply confirms once the interval
+        # elapses. None/0 disables it.
+        if (confirm and self._min_confirm_interval and self._last_confirm_t is not None
+                and t - self._last_confirm_t < self._min_confirm_interval):
+            confirm = False
+
+        if confirm:
             gloss = self._queue[0]
             self._score += self._get_points
+            self._last_confirm_t = t
             self._advance()
             return self.state(strength=strength, event="get", confirmed=gloss,
                               distance=distance)

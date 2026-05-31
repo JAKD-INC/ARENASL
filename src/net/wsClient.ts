@@ -7,18 +7,17 @@ import type {
   OpponentView,
   PlayerProgress,
 } from './protocol.ts'
-import { MockNetClient } from './mockClient.ts'
 
 /**
  * Real WebSocket client speaking the backend protocol (server/app/messages.py).
- * Written to spec but NOT yet verified against the live server — the app uses
- * {@link MockNetClient} by default (see {@link createNetClient}). It maps the
- * backend's snake_case wire format to/from the camelCase {@link NetEvent}s.
+ * The only networking implementation — recognition is server-side, so there is no
+ * offline mock. It maps the backend's snake_case wire format to/from the
+ * camelCase {@link NetEvent}s.
  *
  * Phase-5 TODO (needs David's running server): WebRTC peer link. On `match.found`
  * we get a `role`; the real client must build an RTCPeerConnection, exchange SDP/
  * ICE via `{type:'signal'}` messages, and feed the opponent's live progress into
- * the store. Until then, the in-match opponent is the local MockDriver.
+ * the store.
  */
 export class WebSocketNetClient implements NetClient {
   playerId: number | null = null
@@ -40,10 +39,11 @@ export class WebSocketNetClient implements NetClient {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(this.url)
       this.ws = ws
-      ws.addEventListener('open', () => this.send({ type: 'auth', token: token ?? '' }))
+      console.log('[ARENASL/ws] connecting to', this.url)
+      ws.addEventListener('open', () => { console.log('[ARENASL/ws] OPEN -> sending auth'); this.send({ type: 'auth', token: token ?? '' }) })
       ws.addEventListener('message', (ev) => this.handle(JSON.parse(String(ev.data)), resolve))
-      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')))
-      ws.addEventListener('close', () => this.emit({ type: 'opponentStatus', playerId: -1, connected: false }))
+      ws.addEventListener('error', () => { console.warn('[ARENASL/ws] ERROR'); reject(new Error('WebSocket connection failed')) })
+      ws.addEventListener('close', (e) => { console.warn('[ARENASL/ws] CLOSE code=', e.code, 'reason=', e.reason); this.emit({ type: 'opponentStatus', playerId: -1, connected: false }) })
     })
   }
 
@@ -98,7 +98,12 @@ export class WebSocketNetClient implements NetClient {
   // --- wire mapping ---------------------------------------------------------
 
   private send(obj: Record<string, unknown>): void {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj))
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      if (obj.type !== 'landmark') console.log('[ARENASL/ws] send', obj.type)
+      this.ws.send(JSON.stringify(obj))
+    } else if (obj.type !== 'landmark') {
+      console.warn('[ARENASL/ws] DROPPED send (socket not open, state=', this.ws?.readyState, ')', obj.type)
+    }
   }
 
   private emit(event: NetEvent): void {
@@ -106,6 +111,9 @@ export class WebSocketNetClient implements NetClient {
   }
 
   private handle(msg: Record<string, unknown>, resolveAuth: () => void): void {
+    if (msg.type !== 'recognition.update' && msg.type !== 'match.state') {
+      console.log('[ARENASL/ws] recv', msg.type, msg.type === 'error' ? msg : '')
+    }
     switch (msg.type) {
       case 'auth.ok':
         this.playerId = msg.player_id as number
@@ -205,13 +213,12 @@ function mapOpponent(o: Record<string, unknown>): OpponentView {
 }
 
 /**
- * Pick the networking implementation. Defaults to the local mock so the flow is
- * demoable with no server. Set `localStorage.arenasl.server = "wss://host/ws"`
- * (or `?server=` in the URL) to use the real backend.
+ * Pick the networking implementation. Always the real backend — recognition is
+ * server-side, so there is no offline mock. Set `localStorage.arenasl.server =
+ * "wss://host/ws"` (or `?server=` in the URL) to point at a non-default host.
  */
 export function createNetClient(): NetClient {
   const params = new URLSearchParams(location.search)
-  if (params.get('mock') === '1') return new MockNetClient()
   const server = params.get('server') ?? localStorage.getItem('arenasl.server') ?? '/ws'
   return new WebSocketNetClient(resolveWsUrl(server))
 }

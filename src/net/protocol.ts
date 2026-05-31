@@ -1,8 +1,7 @@
 /**
- * Frontend mirror of the backend WebSocket protocol (server/app/messages.py on
- * `feat/backend-server`). The UI is built entirely against {@link NetClient} so
- * the {@link MockNetClient} (local simulation, demoable now) and the real
- * {@link WebSocketNetClient} are interchangeable.
+ * Frontend mirror of the backend WebSocket protocol (server/app/messages.py).
+ * The UI is built entirely against {@link NetClient}, implemented by
+ * {@link WebSocketNetClient} (the only client — recognition is server-side).
  *
  * Field names are camelCase here; the WS client maps to/from the backend's
  * snake_case on the wire.

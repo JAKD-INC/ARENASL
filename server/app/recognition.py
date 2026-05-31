@@ -152,17 +152,78 @@ class RecognitionSession:
             "confirm_hold": getattr(s, "asl_confirm_hold", 100000),
             "warmup_frames": getattr(s, "asl_warmup_frames", 0),
             "rank_every": getattr(s, "asl_rank_every", None),
+            "rank_gate": getattr(s, "asl_rank_gate", 0) or None,
+            "min_confirm_interval": getattr(s, "asl_min_confirm_interval", 0.0) or None,
         }
         accepted = inspect.signature(Session.__init__).parameters
         for name, value in advanced.items():
             if name in accepted:
                 kwargs[name] = value
 
+        if _uses_embedding:
+            # The DTW-tuned confirm params are WRONG for the embedding matcher.
+            # Its strength is (cosine + 1) / 2, which has a high positive baseline
+            # (WRONG signs average ~0.63), so peak >= 0.6 is met the instant a hand
+            # is in frame and the dip/overtake heuristics then fire on the noisy
+            # baseline -> every prompt confirms immediately. Confirm on a SUSTAINED
+            # HIGH HOLD instead: a high threshold with the warmup gate on, and the
+            # dip + overtake paths neutralized (a held correct sign does not dip,
+            # and a noisy next-target must not overtake). An 80-gloss held-out sweep
+            # moved wrong-sign false-accept 81% -> ~12% while keeping true-accept
+            # ~89%. Any param the operator set explicitly via env still wins.
+            # The open-set rank gate (top-2) additionally requires the prompt to be
+            # the best-matching gloss, so generic/arbitrary hand motion that merely
+            # scores high on the prompt no longer passes.
+            # window_size MUST match train.dataset.WINDOW_SIZE (16): the encoder and
+            # its prototypes are built from 16-frame windows, so feeding the DTW-era
+            # 48-frame buffer compares mismatched temporal extents (measured: 16 vs
+            # 48 recovered true-accept 53% -> 69% at the same ~1% false-accept).
+            # Hardcoded (not imported) because train.dataset pulls torch, absent from
+            # the server image; keep in sync if WINDOW_SIZE changes (=> retrain).
+            emb = {
+                # Tuned for forgiveness (the encoder under-scores a real signer's
+                # own signing vs WLASL prototypes): a lower strength bar, a wider
+                # open-set rank window, and a shorter hold. Still gated by motion +
+                # hand presence so arbitrary hands don't pass. Tighten via the
+                # ASL_* env vars if it over-accepts.
+                "asl_get_threshold": ("get_threshold", 0.82),
+                "asl_confirm_hold": ("confirm_hold", 5),
+                "asl_warmup_frames": ("warmup_frames", 10),
+                "asl_confirm_drop": ("confirm_drop", -1.0),       # disable dip
+                "asl_overtake_frames": ("overtake_frames", 10**9),  # disable overtake
+                "asl_rank_gate": ("rank_gate", 6),                # prompt must be top-6
+                "asl_window_size": ("window_size", 16),           # == train WINDOW_SIZE
+                "asl_min_confirm_interval": ("min_confirm_interval", 2.0),  # >=2s apart
+                # Auto-fail a word after 10s so an unrecognized sign doesn't block
+                # the stream forever. Valid now that the live `t` is in SECONDS (the
+                # landmark provider divides performance.now() by 1000); before that
+                # fix a 6s budget mis-fired on the 2nd frame ("passes instantly").
+                "asl_miss_budget": ("miss_budget", 10.0),
+            }
+            explicit = getattr(s, "model_fields_set", set())
+            for field, (kw, value) in emb.items():
+                if kw in kwargs and field not in explicit:
+                    kwargs[kw] = value
+
         self._session = Session(
             matcher or get_matcher(),
             words.word_iter(seed),
             **kwargs,
         )
+        # Opt-in backend tracing (ASL_DEBUG=1): logs the active params once, then a
+        # per-frame line (hand presence, live feature range, strength, window
+        # motion, peak/hold/warmup, top-3 open-set ranking, confirm event) so the
+        # REAL live data — not cached clips — can be inspected.
+        self._debug = os.environ.get("ASL_DEBUG") == "1"
+        if self._debug:
+            logger.info(
+                "RECO new session seed=%d embedding=%s feature=%s window=%s "
+                "get_threshold=%s confirm_hold=%s warmup=%s rank_gate=%s min_interval=%s",
+                seed, _uses_embedding, self._feature_mode, kwargs.get("window_size"),
+                kwargs.get("get_threshold"), kwargs.get("confirm_hold"),
+                kwargs.get("warmup_frames"), kwargs.get("rank_gate"),
+                kwargs.get("min_confirm_interval"),
+            )
 
     @property
     def word_index(self) -> int:
@@ -174,6 +235,25 @@ class RecognitionSession:
         # The word that just completed/expired is at the pre-advance index; the
         # deterministic stream lets us name it without trusting Session internals.
         word = words.word_at(self._seed, self._index).word
+        if self._debug:
+            sess = self._session
+            buf = sess._buffer
+            win = np.array(buf) if len(buf) else None
+            motion = (float(np.mean(np.std(win, axis=0)))
+                      if win is not None and win.ndim == 2 and len(win) > 1 else 0.0)
+            top = []
+            mch = sess._matcher
+            if win is not None and win.ndim == 2 and hasattr(mch, "rank"):
+                try:
+                    top = [(r["gloss"], r["distance"]) for r in mch.rank(win, 3)]
+                except Exception as exc:  # never let tracing break recognition
+                    top = [("rank_error", str(exc))]
+            logger.info(
+                "RECO t=%.2f win=%d motion=%.4f tgt=%r str=%.3f peak=%.3f hold=%d "
+                "warm=%d/%d event=%s top3=%s",
+                t, len(buf), motion, word, state.strength, sess._peak, sess._hold,
+                sess._frames_since_advance, sess._warmup_frames, state.event, top,
+            )
         if state.event in ("get", "miss"):
             outcome = Outcome(state.event, word, self._index, state.strength)
             self._index += 1
@@ -187,6 +267,18 @@ class RecognitionSession:
         In the default "full" feature mode the row is the full 147-dim frame. In
         "hands" mode it is reduced to the 84-dim hand-xy match features (matching
         what the offline-built embedding prototypes are scored against)."""
+        # Hands-only matching is meaningless without a hand. An undetected hand
+        # arrives as None; assemble_frame would zero-fill it, and a no-hand frame
+        # normalizes (against the jittering shoulders) into spurious "motion" that
+        # the encoder maps to a ~1.0 cosine -> the prompt confirms with no hands in
+        # frame. Require at least one detected hand, checked on the RAW input so
+        # shoulder jitter can't disguise an empty frame as movement. (The "full"
+        # DTW mode still accepts pose-only frames, preserving its behavior.)
+        if self._feature_mode == "hands" and not hand_left and not hand_right:
+            if self._debug:
+                logger.info("RECO t=%.2f REJECT no-hands (L=%s R=%s pose=%s)",
+                            t, bool(hand_left), bool(hand_right), pose is not None)
+            return None
         try:
             frame = assemble_frame(pose, hand_left, hand_right)
             row = normalize_frame(frame).flatten()
@@ -196,6 +288,12 @@ class RecognitionSession:
                 from asl.schema import match_features
 
                 row = match_features(row)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as exc:
+            if self._debug:
+                logger.info("RECO t=%.2f REJECT unusable: %s", t, exc)
             return None
+        if self._debug:
+            logger.info("RECO t=%.2f frame L=%s R=%s feat[min=%.3f max=%.3f mean=%.3f]",
+                        t, bool(hand_left), bool(hand_right),
+                        float(row.min()), float(row.max()), float(row.mean()))
         return self.push_frame(row, t)

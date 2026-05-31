@@ -1,7 +1,5 @@
 import { startCamera } from './camera.ts'
 import { GameStore } from './game/store.ts'
-import { MockDriver } from './game/mockDriver.ts'
-import { SignCapture } from './game/signCapture.ts'
 import { Hud } from './ui/hud.ts'
 import { Vfx } from './ui/vfx.ts'
 import { CaptureUI } from './ui/capture.ts'
@@ -17,7 +15,6 @@ import { Router } from './app/router.ts'
 import { NetMatchDriver } from './game/netMatch.ts'
 import { PracticeDriver } from './game/practiceDriver.ts'
 import { createNetClient } from './net/wsClient.ts'
-import { MockNetClient } from './net/mockClient.ts'
 import { ensureAuth } from './net/auth.ts'
 import type { OpponentView } from './net/protocol.ts'
 import { TitleScreen } from './ui/screens/title.ts'
@@ -50,6 +47,10 @@ const COACH_STEPS: CoachStep[] = [
   { title: 'Score big', body: 'A clean sign scores PERFECT and builds your combo. Miss? Just try again — nothing to lose.' },
   { title: 'Ready to battle?', body: 'Leave Practice and hit Play to face a rival. Your HP stays hidden until the big reveal!' },
 ]
+
+// Build marker: if this line is ABSENT from your browser console after a reload,
+// the tab is running a stale bundle (server-only recognition is the new code).
+console.log('%c[ARENASL] build=server-only-recognition (no mock, no local heuristic)', 'color:#0a0;font-weight:bold')
 
 function showMessage(text: string): void {
   message.textContent = text
@@ -90,11 +91,8 @@ async function main(): Promise<void> {
   const looks = new LookController(video, colorRenderer, lensRenderer)
 
   const captureUI = new CaptureUI(captureRoot, sound)
-  const capture = new SignCapture(store, landmarks, captureUI)
-  capture.start() // idles until a match/practice begins
   captureRoot.classList.add('hidden')
 
-  const driver = new MockDriver(store)
   let netDriver: NetMatchDriver | null = null
   let practiceDriver: PracticeDriver | null = null
   const dbg = makeNetDebug()
@@ -155,32 +153,22 @@ async function main(): Promise<void> {
   async function startNetMatch(seed: number, opp: OpponentView): Promise<void> {
     router.show(null)
     await sound.resume()
-    const online = !(net instanceof MockNetClient)
     store.beginMatch(seed, opp.displayName)
     await store.runCountdown(3)
-    if (online) {
-      // Server owns recognition/HP/words: pause the local heuristic, stream up.
-      capture.pause()
-      netDriver = new NetMatchDriver(store, net, landmarks, captureUI, dbg)
-      netDriver.start(net.playerId ?? -1)
-    } else {
-      capture.resume()
-      driver.start()
-    }
+    // The server owns recognition/HP/words; stream raw landmarks up to it.
+    netDriver = new NetMatchDriver(store, net, landmarks, captureUI, dbg)
+    netDriver.start(net.playerId ?? -1)
   }
   async function enterPractice(): Promise<void> {
     router.show(null)
     await sound.resume()
     // Practice uses the SERVER recognizer over a dedicated practice stream (NOT
-    // matchmaking). Ensure we're authed + connected first; if the backend is
-    // unreachable we fall back to the mock client, whose practice stub keeps the
-    // same flow alive offline.
-    if (!(net instanceof MockNetClient) && net.playerId == null) {
+    // matchmaking). Ensure we're authed + connected first.
+    if (net.playerId == null) {
       await connectNet(displayName || 'You')
     }
-    // Server owns recognition + the word/clip sequence: pause the local
-    // heuristic and stream raw landmarks up instead.
-    capture.pause()
+    // The server owns recognition + the word/clip sequence; stream raw landmarks up.
+    console.log('[ARENASL] enterPractice: net.playerId=', net.playerId, '— starting server PracticeDriver')
     store.startNetPractice()
     practiceDriver = new PracticeDriver(store, net, landmarks, captureUI, dbg)
     practiceDriver.start()
@@ -189,7 +177,6 @@ async function main(): Promise<void> {
   function exitPractice(): void {
     practiceDriver?.stop() // sends practice.stop + tears down the stream
     practiceDriver = null
-    capture.resume() // back to the local heuristic for offline/idle
     store.endPractice()
     goTitle()
   }
@@ -219,25 +206,24 @@ async function main(): Promise<void> {
   }
 
   /**
-   * Authenticate (per-device account → JWT) and connect to the backend. If the
-   * backend is unreachable, fall back to the offline mock so Practice and a
-   * standalone demo still work.
+   * Authenticate (per-device account → JWT) and connect to the backend. There is
+   * no offline fallback: recognition is server-side, so a failure here is surfaced
+   * (the app cannot fake it) rather than silently dropping to a local heuristic.
    */
   async function connectNet(name: string): Promise<void> {
-    if (!(net instanceof MockNetClient)) {
-      try {
-        const id = await ensureAuth(name)
-        store.setMyName(id.displayName)
-        await net.connect(id.displayName, id.token)
-        subscribeMatchEvents()
-        return
-      } catch (err) {
-        console.warn('Backend unavailable — running offline (mock):', err)
-        net = new MockNetClient()
-      }
+    try {
+      const id = await ensureAuth(name)
+      store.setMyName(id.displayName)
+      await net.connect(id.displayName, id.token)
+      subscribeMatchEvents()
+    } catch (err) {
+      console.error('[arena] cannot reach the game server:', err)
+      message.textContent =
+        'Cannot reach the game server. Recognition runs on the backend — start it ' +
+        '(port 8001) and reload.'
+      message.classList.remove('hidden')
+      throw err
     }
-    await net.connect(name)
-    subscribeMatchEvents()
   }
 
   // --- audio + capture/practice visibility follow the phase machine ---
@@ -255,10 +241,8 @@ async function main(): Promise<void> {
     }
   })
   store.on('finished', () => {
-    driver.stop()
     netDriver?.stop()
     netDriver = null
-    capture.resume() // back to local capture for practice/offline
     sound.stopHold()
     sound.stopMusic()
     store.getState().winner === 'me' ? sound.win() : sound.lose()
@@ -273,13 +257,13 @@ async function main(): Promise<void> {
         onSubmit: async (n) => {
           displayName = n
           localStorage.setItem(NAME_KEY, n)
-          await connectNet(n)
+          await connectNet(n).catch(() => {}) // error surfaced in-app; still show title
           goTitle()
         },
       }),
     )
   } else {
-    await connectNet(displayName)
+    await connectNet(displayName).catch(() => {}) // error surfaced in-app; still show title
     goTitle()
   }
 }

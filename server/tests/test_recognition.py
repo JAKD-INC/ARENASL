@@ -117,11 +117,84 @@ def test_hands_feature_mode_reduces_to_84_dim(domain):
         get_settings.cache_clear()
         spy = WidthSpy()
         sess = RecognitionSession(seed=1, matcher=spy)
-        sess.push_landmarks(_shoulders_pose(), None, None, t=0.0)
+        # A detected left hand (21 pts) so the frame is usable: hands mode now
+        # rejects hand-less frames before the matcher (see presence gate).
+        hand = [[0.1 + 0.01 * i, 0.2, 0.0] for i in range(21)]
+        sess.push_landmarks(_shoulders_pose(), hand, None, t=0.0)
         assert spy.widths and set(spy.widths) == {HANDS_D}
     finally:
         os.environ.pop("ASL_FEATURE_MODE", None)
         get_settings.cache_clear()
+
+
+def _emb(monkeypatch):
+    """Mark the active matcher as the learned EmbeddingMatcher for one test, so a
+    RecognitionSession picks up the embedding-tuned confirm params."""
+    monkeypatch.setattr(recognition, "_uses_embedding", True)
+
+
+def test_embedding_mode_rejects_wrong_sign(domain, monkeypatch):
+    """REGRESSION: with the embedding matcher active, a WRONG sign produces a
+    moderate, noisy strength (~0.6-0.7 — wrong signs average ~0.63 on the (cos+1)/2
+    scale) that clears the DTW-era 0.6 threshold and dips. The DTW dip/overtake
+    confirm would pass the word instantly ("every word passes as soon as I'm in
+    frame"). Embedding mode must confirm ONLY on a sustained HIGH hold, so this
+    never reaches a 'get'."""
+    _emb(monkeypatch)
+    # (current-target, next-target) per frame: peaks at 0.70 then dips to 0.54
+    # (<= 0.70*0.8) — a dip the DTW params would confirm. Never approaches a high
+    # hold threshold.
+    cur = [0.70, 0.62, 0.54, 0.50, 0.60, 0.66, 0.58, 0.52, 0.63, 0.59, 0.61, 0.57]
+    sched = [v for c in cur for v in (c, 0.40)]  # next-target 0.40 (no overtake)
+    sess = RecognitionSession(seed=123, matcher=FakeMatcher(sched))
+    events = [sess.push_frame(np.zeros(HANDS_D), t=i * 0.1).event for i in range(len(cur))]
+    assert "get" not in events
+    assert sess.word_index == 0  # never advanced off the wrong sign
+
+
+def test_embedding_mode_confirms_held_correct_sign(domain, monkeypatch):
+    """True-accept preserved: a correctly-performed sign holds high strength
+    (~0.92, like the ~0.94 self-match mean), so the sustained-hold path confirms it
+    after the warmup gate."""
+    _emb(monkeypatch)
+    cur = [0.92] * 20
+    sched = [v for c in cur for v in (c, 0.40)]
+    sess = RecognitionSession(seed=123, matcher=FakeMatcher(sched))
+    events = [sess.push_frame(np.zeros(HANDS_D), t=i * 0.1).event for i in range(len(cur))]
+    assert "get" in events
+    assert sess.word_index == 1  # advanced past the confirmed word
+
+
+def test_embedding_mode_auto_miss_after_10s(domain, monkeypatch):
+    """Embedding mode auto-fails a word after 10s (seconds — the live timestamp is
+    now seconds, not browser ms), so an unrecognized sign doesn't block the stream
+    forever while still giving the signer real time to perform it."""
+    _emb(monkeypatch)
+    sess = RecognitionSession(seed=1, matcher=FakeMatcher([0.0] * 10))
+    assert sess._session._miss_budget == 10.0
+
+
+def test_embedding_mode_window_matches_training_window(domain, monkeypatch):
+    """Prototypes are enrolled from 16-frame windows (train.dataset.WINDOW_SIZE), so
+    the live session must buffer 16 — not the DTW-era 48 — or it embeds a mismatched
+    temporal extent. (Measured: 16 vs 48 recovered true-accept 53% -> 69%.)"""
+    _emb(monkeypatch)
+    sess = RecognitionSession(seed=1, matcher=FakeMatcher([0.0] * 10))
+    assert sess._session._buffer.maxlen == 16
+
+
+def test_embedding_mode_rejects_pose_only_frames(domain, monkeypatch):
+    """REGRESSION: a person in frame with NO hands detected (handLeft/handRight
+    None) must be an UNUSABLE frame in hands/embedding mode. assemble_frame
+    zero-fills a missing hand, and that no-hand frame normalizes (against jittering
+    shoulders) into spurious motion the encoder maps to ~1.0 cosine -> "passes every
+    word with no hands in frame". The raw-input presence check rejects it regardless
+    of pose jitter, so it never reaches the matcher and never confirms."""
+    _emb(monkeypatch)
+    sess = RecognitionSession(seed=123, matcher=FakeMatcher([0.99] * 100))
+    outs = [sess.push_landmarks(_shoulders_pose(), None, None, t=i * 0.1) for i in range(20)]
+    assert all(o is None for o in outs)
+    assert sess.word_index == 0  # nothing confirmed off a hand-less stream
 
 
 def test_init_matcher_embedding_mode_falls_back_to_dtw_when_files_missing(domain, tmp_path: Path):
